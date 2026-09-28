@@ -30,7 +30,7 @@ collect.sh example db
 | [host/](host) | Host | Create backup, restore, SSH gate |
 | [collector/](collector) | Backup server | Trigger backup, pull files, report |
 | [tests/](tests) | Anywhere | Tests (no database, no network needed) |
-| [docs/](docs) | | [Setup guide](docs/setup.md), [specification](docs/spec.md) and [handover notes](docs/handover.md) (Vietnamese) |
+| [docs/](docs) | | [Setup guide](docs/setup.md). In Vietnamese: [specification](docs/spec.md), [handover notes](docs/handover.md) |
 
 ## Backup file
 
