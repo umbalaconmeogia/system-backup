@@ -1,0 +1,19 @@
+# Common config of the collector (backup server).
+# Copy to collector.conf and edit.
+
+# Healthchecks ping URL: <site root>/ping/<ping key>
+# The ping key is in Healthchecks: Project > Settings > Ping key.
+# Leave empty to disable.
+HC_PING_BASE=https://hc.example.com/ping/your-ping-key
+
+# 1: Create the check on Healthchecks automatically when it does not exist.
+HC_AUTO_CREATE=1
+
+# (Optional) Slack incoming webhook. One line is sent after every run, including successful runs.
+REPORT_SLACK_WEBHOOK=
+
+# Fail when free space of the backup directory is less than this (MB).
+MIN_FREE_MB=1024
+
+# Fail when the new backup is smaller than the previous one by more than this percent. 0 to disable.
+SIZE_DROP_LIMIT=50

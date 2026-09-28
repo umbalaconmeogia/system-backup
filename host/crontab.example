@@ -1,0 +1,5 @@
+# crontab of the host (the server that runs the system).
+# Backups are normally triggered by the backup server.
+# This is the fallback: if there is no backup of today at 05:00, create one locally.
+
+0 5 * * * /opt/backup-script/host/backup.sh --if-missing db > /dev/null 2>&1

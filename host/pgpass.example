@@ -1,0 +1,3 @@
+# hostname:port:database:username:password
+# On Linux, permission of this file must be 0600.
+localhost:5432:example_db:example_user:change_me

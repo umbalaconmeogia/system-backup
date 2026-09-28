@@ -1,0 +1,32 @@
+# Config of backup.sh, restore.sh, ssh-gate.sh.
+# Copy to backup.conf and edit.
+
+# Project name and environment, used in file names.
+PROJECT=example
+ENV=prod
+
+# Where to store backup files. Must be outside of SOURCE_DIR.
+BACKUP_DIR=/var/backup/example
+
+# Database: mysql, pgsql or none.
+DB_TYPE=mysql
+DB_NAME=example_db
+# MySQL: my.cnf file (see my.cnf.example). PostgreSQL: .pgpass file (see pgpass.example).
+# Relative path is relative to this file.
+DB_CREDENTIAL_FILE=my.cnf
+# PostgreSQL only (for MySQL, they are set in my.cnf).
+#DB_HOST=localhost
+#DB_PORT=5432
+#DB_USER=example_user
+
+# Source directory. All files are backed up, nothing is excluded.
+SOURCE_DIR=/var/www/example
+
+# Delete automatic backups older than KEEP_DAYS, but keep at least KEEP_MIN files of each type.
+# Labeled backups are never deleted.
+KEEP_DAYS=30
+KEEP_MIN=7
+
+# (Optional) Notification of the fallback backup (backup.sh --if-missing).
+NOTIFY_SLACK_WEBHOOK=
+NOTIFY_MAIL=

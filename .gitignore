@@ -1,0 +1,15 @@
+# Real config files, they contain credentials.
+/host/backup.conf
+/host/my.cnf
+/host/pgpass
+/host/.pgpass
+/collector/collector.conf
+/collector/projects.d/*.conf
+
+# Backup files
+*.zip
+*.zip.sha256
+*.sql
+
+# Internal notes
+/docs/requirement.md

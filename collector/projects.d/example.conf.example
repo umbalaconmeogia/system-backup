@@ -1,0 +1,20 @@
+# Config of one project. Copy to <name>.conf and edit.
+# <name> is the first parameter of collect.sh.
+
+# Must be same as in backup.conf on the host.
+PROJECT=example
+ENV=prod
+
+# SSH connection to the host.
+SSH_HOST=203.0.113.10
+SSH_PORT=22
+SSH_USER=backup
+SSH_KEY=/home/backup/.ssh/example_ed25519
+
+# Where to store backup files on this server.
+LOCAL_DIR=/backup/example
+
+# Delete automatic backups older than KEEP_DAYS, but keep at least KEEP_MIN files of each type.
+# Labeled backups are never deleted.
+KEEP_DAYS=365
+KEEP_MIN=7
