@@ -2,5 +2,5 @@
 # All schedules of all projects are managed here.
 
 # example: database every day except Sunday, database + source on Sunday.
-0 1 * * 1-6 /opt/backup-script/collector/collect.sh example db > /dev/null 2>&1
-0 1 * * 0   /opt/backup-script/collector/collect.sh example full > /dev/null 2>&1
+0 1 * * 1-6 /opt/webapp-backup/collector/collect.sh example db > /dev/null 2>&1
+0 1 * * 0   /opt/webapp-backup/collector/collect.sh example full > /dev/null 2>&1

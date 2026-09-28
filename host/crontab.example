@@ -2,4 +2,4 @@
 # Backups are normally triggered by the backup server.
 # This is the fallback: if there is no backup of today at 05:00, create one locally.
 
-0 5 * * * /opt/backup-script/host/backup.sh --if-missing db > /dev/null 2>&1
+0 5 * * * /opt/webapp-backup/host/backup.sh --if-missing db > /dev/null 2>&1

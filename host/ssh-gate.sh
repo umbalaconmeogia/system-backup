@@ -4,7 +4,7 @@
 # The backup server can only run the commands below, nothing else.
 #
 # ~/.ssh/authorized_keys:
-#   command="/opt/backup-script/host/ssh-gate.sh /opt/backup-script/host/backup.conf",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ssh-ed25519 AAAA... backup-server
+#   command="/opt/webapp-backup/host/ssh-gate.sh /opt/webapp-backup/host/backup.conf",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ssh-ed25519 AAAA... backup-server
 #
 # Allowed commands (sent by the backup server as SSH command):
 #   backup <db|source|full>   Create a backup, print the file name.

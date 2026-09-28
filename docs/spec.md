@@ -1,4 +1,4 @@
-# Backup script - Specification
+# Webapp backup - Specification
 
 Tài liệu này cụ thể hóa requirement thành spec để triển khai.
 
@@ -53,7 +53,7 @@ collect.sh example db
 Trên server hệ thống đặt thêm 1 cron chạy muộn hơn giờ backup thường lệ:
 
 ```
-0 5 * * * /opt/backup-script/host/backup.sh db --if-missing
+0 5 * * * /opt/webapp-backup/host/backup.sh db --if-missing
 ```
 
 `--if-missing`: nếu hôm nay đã có bản backup thì không làm gì; nếu chưa có thì tự tạo backup vào thư mục local

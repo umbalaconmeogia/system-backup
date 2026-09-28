@@ -1,6 +1,6 @@
 # Setup guide
 
-In this guide, the scripts are installed in `/opt/backup-script`, the project is named `example`.
+In this guide, the scripts are installed in `/opt/webapp-backup`, the project is named `example`.
 
 ## 1. Host
 
@@ -11,10 +11,10 @@ sudo apt install zip unzip          # Ubuntu
 sudo dnf install zip unzip          # Amazon Linux
 ```
 
-Copy the directory `host/` to `/opt/backup-script/host`.
+Copy the directory `host/` to `/opt/webapp-backup/host`.
 
 ```bash
-chmod +x /opt/backup-script/host/*.sh
+chmod +x /opt/webapp-backup/host/*.sh
 ```
 
 ### 1.2. User
@@ -25,7 +25,7 @@ This user needs permission to read all files of the source directory.
 ### 1.3. Config
 
 ```bash
-cd /opt/backup-script/host
+cd /opt/webapp-backup/host
 cp backup.conf.example backup.conf
 cp my.cnf.example my.cnf            # PostgreSQL: cp pgpass.example pgpass
 chmod 600 backup.conf my.cnf
@@ -49,7 +49,7 @@ ls -l /var/backup/example
 Add the public key of the backup server (created in 2.2) into `~/.ssh/authorized_keys` of the user, in one line:
 
 ```
-command="/opt/backup-script/host/ssh-gate.sh /opt/backup-script/host/backup.conf",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ssh-ed25519 AAAA... backup-server
+command="/opt/webapp-backup/host/ssh-gate.sh /opt/webapp-backup/host/backup.conf",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ssh-ed25519 AAAA... backup-server
 ```
 
 With this key, the backup server can only create backups, list and read the backup files of this project.
@@ -62,7 +62,7 @@ If the backup server does not trigger the backup (for example, it is down), the 
 Add into crontab of the user (see [crontab.example](../host/crontab.example)), the time must be later than the schedule of the backup server:
 
 ```
-0 5 * * * /opt/backup-script/host/backup.sh --if-missing db > /dev/null 2>&1
+0 5 * * * /opt/webapp-backup/host/backup.sh --if-missing db > /dev/null 2>&1
 ```
 
 When a fallback backup is created, a notification is sent to `NOTIFY_SLACK_WEBHOOK` and `NOTIFY_MAIL` of `backup.conf`.
@@ -72,10 +72,10 @@ The file is pulled by the backup server at its next run.
 
 ### 2.1. Install
 
-Copy the directory `collector/` to `/opt/backup-script/collector`.
+Copy the directory `collector/` to `/opt/webapp-backup/collector`.
 
 ```bash
-chmod +x /opt/backup-script/collector/*.sh
+chmod +x /opt/webapp-backup/collector/*.sh
 ```
 
 ### 2.2. SSH key
@@ -95,7 +95,7 @@ ssh -i ~/.ssh/example_ed25519 -p 22 backup@203.0.113.10 list
 ### 2.3. Config
 
 ```bash
-cd /opt/backup-script/collector
+cd /opt/webapp-backup/collector
 cp collector.conf.example collector.conf
 cp projects.d/example.conf.example projects.d/example.conf
 chmod 600 collector.conf projects.d/example.conf
@@ -115,8 +115,8 @@ ls -l /backup/example
 Add into crontab (see [crontab.example](../collector/crontab.example)):
 
 ```
-0 1 * * 1-6 /opt/backup-script/collector/collect.sh example db > /dev/null 2>&1
-0 1 * * 0   /opt/backup-script/collector/collect.sh example full > /dev/null 2>&1
+0 1 * * 1-6 /opt/webapp-backup/collector/collect.sh example db > /dev/null 2>&1
+0 1 * * 0   /opt/webapp-backup/collector/collect.sh example full > /dev/null 2>&1
 ```
 
 ## 3. Healthchecks
@@ -173,7 +173,7 @@ restore.bat C:\path\to\example_prod_db_20260928_010000.zip
 ```bash
 cd /var/backup/example
 unzip example_prod_full_20260928_010000.zip
-/opt/backup-script/host/restore.sh --as-is example_prod_full_20260928_010000
+/opt/webapp-backup/host/restore.sh --as-is example_prod_full_20260928_010000
 cp -a example_prod_full_20260928_010000/example /var/www/
 chown -R www-data:www-data /var/www/example      # Owner of files is not stored in the zip file
 ```

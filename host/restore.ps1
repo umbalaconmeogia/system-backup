@@ -150,7 +150,12 @@ try {
     if ($dbType -eq 'mysql') {
         $client = Find-Command @('mysql', 'mariadb')
         $common = "--defaults-extra-file=`"$credential`""
-        Invoke-Client $client "$common -e `"CREATE DATABASE IF NOT EXISTS ``$dbName`` CHARACTER SET utf8mb4`"" $null
+        # This fails when the user has no permission to create database, even if the database exists.
+        try {
+            Invoke-Client $client "$common -e `"CREATE DATABASE IF NOT EXISTS ``$dbName`` CHARACTER SET utf8mb4`"" $null
+        } catch {
+            Write-Host "Cannot create database `"$dbName`", it is supposed to exist."
+        }
         Invoke-Client $client "$common --default-character-set=utf8mb4 `"$dbName`"" $adjusted
     } else {
         $client = Find-Command @('psql')

@@ -106,17 +106,18 @@ if [ -n "$LABEL" ]; then
     NAME="${NAME}_${LABEL}"
 fi
 WORK="$WORK_ROOT/$NAME"
+LINK_DIR="$WORK_ROOT/$NAME.link"
 ZIP_FILE="$BACKUP_DIR/$NAME.zip"
 WARNINGS=0
 
 cleanup() {
     local rc=$?
     set +e
-    # $WORK may contain a symbolic link to SOURCE_DIR. Remove the link itself first.
-    if [ -n "${SOURCE_NAME:-}" ] && [ -L "$WORK/$SOURCE_NAME" ]; then
-        rm -f "$WORK/$SOURCE_NAME"
+    # $LINK_DIR contains a symbolic link to the parent of SOURCE_DIR. Remove the link itself first.
+    if [ -L "$LINK_DIR/$NAME" ]; then
+        rm -f "$LINK_DIR/$NAME"
     fi
-    rm -rf "$WORK" "$WORK_ROOT/$NAME.err"
+    rm -rf "$WORK" "$LINK_DIR" "$WORK_ROOT/$NAME.err"
     rm -f "$ZIP_FILE.part" "$ZIP_FILE.sha256.part"
     if [ $rc -ne 0 ]; then
         log "Backup FAILED: $NAME"
@@ -179,24 +180,28 @@ EOF
 }
 
 create_zip() {
-    local rc=0
+    local rc=0 parent
     local -a items=("$NAME/manifest.txt")
     if [ "$NEED_DB" = 1 ]; then
         items+=("$NAME/db.sql")
     fi
+    (cd "$WORK_ROOT" && zip -q "$ZIP_FILE.part" "${items[@]}") >&2 || die "zip failed (exit code $?)"
     if [ "$NEED_SOURCE" = 1 ]; then
-        # The source directory is not copied. It is linked into the work directory.
-        # The trailing slash makes zip go into the link, while links inside are stored as links (-y).
-        ln -s "$SOURCE_DIR" "$WORK/$SOURCE_NAME"
-        items+=("$NAME/$SOURCE_NAME/")
-    fi
-    (cd "$WORK_ROOT" && zip -r -y -q "$ZIP_FILE.part" "${items[@]}") >&2 || rc=$?
-    if [ $rc -eq 18 ]; then
-        # Some files could not be read (no permission, or removed while zipping).
-        WARNINGS=1
-        log "WARNING: zip could not read some files, the backup may be incomplete."
-    elif [ $rc -ne 0 ]; then
-        die "zip failed (exit code $rc)"
+        # The source directory is added to the zip file without being copied:
+        # <LINK_DIR>/<NAME> is a symbolic link to the parent directory of SOURCE_DIR,
+        # so <NAME>/<SOURCE_NAME> is the source directory itself.
+        # Symbolic links inside the source directory are stored as links (-y).
+        parent=${SOURCE_DIR%/*}
+        mkdir -p "$LINK_DIR"
+        ln -s "${parent:-/}" "$LINK_DIR/$NAME"
+        (cd "$LINK_DIR" && zip -r -y -q "$ZIP_FILE.part" "$NAME/$SOURCE_NAME") >&2 || rc=$?
+        if [ $rc -eq 18 ]; then
+            # Some files could not be read (no permission, or removed while zipping).
+            WARNINGS=1
+            log "WARNING: zip could not read some files, the backup may be incomplete."
+        elif [ $rc -ne 0 ]; then
+            die "zip failed (exit code $rc)"
+        fi
     fi
     unzip -tq "$ZIP_FILE.part" > /dev/null || die "Created zip file is broken"
     mv "$ZIP_FILE.part" "$ZIP_FILE"

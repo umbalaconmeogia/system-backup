@@ -111,8 +111,10 @@ pgsql_filter() {
 case "$DB_TYPE" in
     mysql)
         CMD=$(first_cmd mysql mariadb)
+        # This fails when the user has no permission to create database, even if the database exists.
         "$CMD" --defaults-extra-file="$DB_CREDENTIAL_FILE" \
-            -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4"
+            -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4" 2> /dev/null \
+            || log "Cannot create database \"$DB_NAME\", it is supposed to exist."
         mysql_filter | "$CMD" --defaults-extra-file="$DB_CREDENTIAL_FILE" --default-character-set=utf8mb4 "$DB_NAME"
         ;;
     pgsql)
