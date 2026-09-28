@@ -32,7 +32,7 @@ collect.sh example db
 | [host/](host) | Host | Tạo backup, restore, cổng SSH |
 | [collector/](collector) | Backup server | Kích hoạt backup, kéo file, báo cáo |
 | [tests/](tests) | Bất kỳ đâu | Unit test dùng stub, integration test dùng Docker |
-| [docs/](docs) | | [Hướng dẫn cài đặt](docs/setup.md) (tiếng Anh). Tiếng Việt: [đặc tả](docs/spec.md), [ghi chú bàn giao](docs/handover.md), [ghi chú phát triển](docs/dev-note.md) |
+| [docs/](docs) | | [Hướng dẫn cài đặt](docs/setup.vi.md). Chỉ có tiếng Việt: [đặc tả](docs/spec.md), [ghi chú bàn giao](docs/handover.md), [ghi chú phát triển](docs/dev-note.md) |
 
 ## File backup
 
@@ -69,7 +69,7 @@ Trên backup server:
 ./collect.sh example sync    # Only pull files that are not here yet
 ```
 
-Xem [hướng dẫn cài đặt](docs/setup.md) để biết cách cài đặt.
+Xem [hướng dẫn cài đặt](docs/setup.vi.md) để biết cách cài đặt.
 
 ## Yêu cầu
 

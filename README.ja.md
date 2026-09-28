@@ -32,7 +32,7 @@ collect.sh example db
 | [host/](host) | ホスト | バックアップ作成、リストア、SSH ゲート |
 | [collector/](collector) | バックアップサーバー | バックアップの起動、ファイルの取得、報告 |
 | [tests/](tests) | どこでも | スタブを使うユニットテスト、Docker を使う結合テスト |
-| [docs/](docs) | | [セットアップガイド](docs/setup.md)（英語）。ベトナム語：[仕様書](docs/spec.md)、[引き継ぎメモ](docs/handover.md)、[開発メモ](docs/dev-note.md) |
+| [docs/](docs) | | [セットアップガイド](docs/setup.ja.md)。ベトナム語のみ：[仕様書](docs/spec.md)、[引き継ぎメモ](docs/handover.md)、[開発メモ](docs/dev-note.md) |
 
 ## バックアップファイル
 
@@ -69,7 +69,7 @@ restore.bat C:\path\to\example_prod_db_20260928_010000.zip
 ./collect.sh example sync    # Only pull files that are not here yet
 ```
 
-インストール方法は[セットアップガイド](docs/setup.md)を参照してください。
+インストール方法は[セットアップガイド](docs/setup.ja.md)を参照してください。
 
 ## 動作要件
 

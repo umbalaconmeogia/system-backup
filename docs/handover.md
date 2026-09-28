@@ -24,7 +24,7 @@ Các vấn đề phát sinh trong quá trình kiểm thử và bài học rút r
 | Tài liệu | Nội dung |
 |---|---|
 | [spec.md](spec.md) | Thiết kế: luồng xử lý, quy ước tên file, config, các lệnh |
-| [setup.md](setup.md) | Hướng dẫn cài đặt host, backup server, Healthchecks |
+| [setup.vi.md](setup.vi.md) | Hướng dẫn cài đặt host, backup server, Healthchecks |
 | [dev-note.md](dev-note.md) | Các lỗi đã gặp và bài học về kiểm thử |
 | [README.md](../README.md) | Giới thiệu |
 
@@ -88,7 +88,7 @@ Kiểm thử còn phát hiện thêm các lỗi chưa được dự đoán, xem 
 ## 6. Việc cần làm tiếp
 
 1. **GitHub Actions**: tạo `.github/workflows/test.yml` chạy cả 2 bộ test mỗi lần push và pull request.
-2. **Chạy thử trên một server thật**: làm theo [setup.md](setup.md) với một dự án thật, kèm Healthchecks thật.
+2. **Chạy thử trên một server thật**: làm theo [setup.vi.md](setup.vi.md) với một dự án thật, kèm Healthchecks thật.
    Kiểm tra cả 2 trường hợp: mail và Slack báo khi backup thất bại, và báo khi quá hạn không có backup.
 3. **Amazon Linux 2023**: thêm một host dùng image `amazonlinux:2023` vào test Docker, bổ sung tên gói vào `setup.md`.
 4. **Database lớn**: chạy kịch bản 13, ghi lại thời gian và dung lượng.
@@ -98,6 +98,7 @@ Kiểm thử còn phát hiện thêm các lỗi chưa được dự đoán, xem 
 | Hạng mục | Quy ước |
 |---|---|
 | Ngôn ngữ | README, `setup.md`, chú thích trong code, commit message: tiếng Anh. `spec.md`, `handover.md`, `dev-note.md`: tiếng Việt |
+| Bản dịch | README và `setup.md` có bản tiếng Việt (`.vi.md`) và tiếng Nhật (`.ja.md`). Khi sửa bản tiếng Anh, sửa cả hai bản dịch |
 | Tên ví dụ | Dùng `example`, `demo`. Không dùng tên dự án thật |
 | Thông tin nhạy cảm | Repo là public. Không commit IP thật, mật khẩu, đường dẫn nội bộ. IP ví dụ dùng dải `203.0.113.0/24` |
 | Config thật | `backup.conf`, `my.cnf`, `collector.conf`, `projects.d/*.conf` đã nằm trong `.gitignore` |

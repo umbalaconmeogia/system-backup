@@ -1,3 +1,5 @@
+[English](setup.md) | [Tiếng Việt](setup.vi.md) | [日本語](setup.ja.md)
+
 # Setup guide
 
 In this guide, the scripts are installed in `/opt/webapp-backup`, the project is named `example`.
