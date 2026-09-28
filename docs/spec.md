@@ -77,6 +77,7 @@ Khi backup server hoạt động lại, lượt `collect.sh` kế tiếp sẽ k�
 | `SOURCE_DIR` | Nếu backup source | Thư mục source |
 | `KEEP_DAYS` | Không (30) | Xóa backup tự động cũ hơn số ngày này |
 | `KEEP_MIN` | Không (7) | Luôn giữ ít nhất số bản này, tính theo từng loại backup |
+| `FAIL_ON_UNREADABLE` | Không (1) | `1`: có file trong `SOURCE_DIR` không đọc được thì backup thất bại, danh sách file ghi vào log. `0`: vẫn tạo backup (thiếu các file đó), chỉ cảnh báo |
 | `NOTIFY_SLACK_WEBHOOK`, `NOTIFY_MAIL` | Không | Nơi nhận thông báo khi chạy dự phòng |
 
 ### 4.2. Quy ước tên và cấu trúc

@@ -11,7 +11,7 @@ Cập nhật lần cuối: 2026-09-28.
 | `collector/collect.sh` | Đã kiểm thử qua sshd thật, báo cáo tới Healthchecks thật |
 | `host/restore.bat`, `host/restore.ps1` | Đã kiểm thử trên Windows với client `mysql` 9.3 và MySQL 8.4 thật: restore dump của MariaDB 11.4 |
 | `tests/run-tests.sh` (test stub) | 78/78 đạt trên Ubuntu 24.04 |
-| `tests/docker/run.sh` (test Docker) | 95/95 đạt |
+| `tests/docker/run.sh` (test Docker) | 110/110 đạt |
 | GitHub Actions | Chưa làm |
 | Chạy thử trên server thật | Chưa làm |
 | Host trên Amazon Linux 2023 | Chưa kiểm thử |
@@ -39,6 +39,10 @@ Các vấn đề phát sinh trong quá trình kiểm thử và bài học rút r
 | Giám sát bằng Healthchecks tự host | Không tự viết phần theo dõi lịch và gửi mail, Slack |
 | Kéo file bằng lệnh `get` qua SSH, không dùng `rsync` | Không cần cài thêm gì trên host, kiểm soát tên file chặt |
 | File backup giữ nguyên bản, mọi điều chỉnh làm lúc restore | Luôn dựng lại được đúng server gốc (`--as-is`) |
+| Host chạy backup bằng user riêng `webapp-backup`, backup lưu ở `/var/webapp-backup` (quyền `700`) | Tên rõ ràng, không nhầm với user `backup` và thư mục `/var/backups` có sẵn của Ubuntu |
+| Code thuộc `root`, config thuộc `root:webapp-backup` quyền `640` (riêng `pgpass` thuộc `webapp-backup`, quyền `600`) | User chạy backup không sửa được `ssh-gate.sh` và config. `pgpass` là ngoại lệ vì client PostgreSQL bỏ qua file group đọc được |
+| Có file source không đọc được thì mặc định backup thất bại (`FAIL_ON_UNREADABLE=1`) | Backup thiếu file mà không ai biết là lỗi tệ nhất. Log liệt kê file không đọc được |
+| Source của user khác: cấp quyền đọc bằng ACL, cài một lần, không dùng cron áp lại quyền | Đơn giản. Trường hợp ACL không bao phủ được thì phát hiện qua `FAIL_ON_UNREADABLE` và sửa tay |
 | Không xử lý riêng Docker, không mã hóa file backup | Ngoài phạm vi |
 | Ưu tiên dùng công cụ có sẵn | Chỉ tự viết phần mà công cụ có sẵn không đáp ứng |
 
@@ -65,8 +69,9 @@ Test Docker dựng các container: MySQL 8.4, MariaDB 11.4, PostgreSQL 16, Healt
 | 9 | Backup tạo trên host được kéo về sau bằng `sync` |
 | 10 | `--if-missing` chạy 2 lần |
 | 11 | 2 backup chạy cùng lúc |
-| 12 | Có file không đọc được trong source: backup vẫn tạo, có cảnh báo |
-| 13 | Database lớn: chỉ chạy khi đặt `LARGE_MB`, ví dụ `LARGE_MB=500 bash tests/docker/run.sh`. **Chưa chạy lần nào** |
+| 12 | Có file không đọc được trong source: mặc định backup thất bại và liệt kê file, với `FAIL_ON_UNREADABLE=0` thì vẫn tạo backup kèm cảnh báo |
+| 13 | Source thuộc user khác, cấp quyền bằng đúng các lệnh ACL trong `setup.md`: file `600` và file tạo sau được backup; file bị `chmod 600` sau đó làm backup thất bại, chạy lại `setfacl` thì hết |
+| 14 | Database lớn: chỉ chạy khi đặt `LARGE_MB`, ví dụ `LARGE_MB=500 bash tests/docker/run.sh`. **Chưa chạy lần nào** |
 
 Tùy chọn `KEEP=1` giữ lại các container sau khi chạy để điều tra.
 
@@ -78,7 +83,7 @@ Tùy chọn `KEEP=1` giữ lại các container sau khi chạy để điều tra
 | 2 | Gọi `zip` 2 lần vào cùng một file `.part` | Hoạt động đúng |
 | 3 | User DB thiếu quyền để dump routine | **Xảy ra**: procedure bị thiếu mà không báo lỗi. Đã ghi quyền cần cấp vào `setup.md` |
 | 4 | User dùng shell `nologin` | **Xảy ra**: Ubuntu có sẵn user `backup` với shell `nologin`. Tài liệu đổi sang user `webapp-backup` |
-| 5 | File source không đọc được | Hoạt động như thiết kế: cảnh báo, vẫn tạo file |
+| 5 | File source không đọc được | Ban đầu chỉ cảnh báo, collector vẫn báo thành công. **Đã đổi thiết kế**: mặc định thất bại và liệt kê file (`FAIL_ON_UNREADABLE`) |
 | 6 | Lọc `OWNER TO`, `GRANT`, `REVOKE` của PostgreSQL | Hoạt động đúng |
 | 7 | `create=1` và `rid` của Healthchecks | Hoạt động đúng |
 | 8 | Amazon Linux 2023 | Chưa kiểm thử |
@@ -91,7 +96,8 @@ Kiểm thử còn phát hiện thêm các lỗi chưa được dự đoán, xem 
 2. **Chạy thử trên một server thật**: làm theo [setup.vi.md](setup.vi.md) với một dự án thật, kèm Healthchecks thật.
    Kiểm tra cả 2 trường hợp: mail và Slack báo khi backup thất bại, và báo khi quá hạn không có backup.
 3. **Amazon Linux 2023**: thêm một host dùng image `amazonlinux:2023` vào test Docker, bổ sung tên gói vào `setup.md`.
-4. **Database lớn**: chạy kịch bản 13, ghi lại thời gian và dung lượng.
+   Cần kiểm tra thêm: gói `acl`, và `find -readable` mà `backup.sh` dùng để liệt kê file không đọc được.
+4. **Database lớn**: chạy kịch bản 14, ghi lại thời gian và dung lượng.
 
 ## 7. Quy ước
 
@@ -104,6 +110,7 @@ Kiểm thử còn phát hiện thêm các lỗi chưa được dự đoán, xem 
 | Config thật | `backup.conf`, `my.cnf`, `collector.conf`, `projects.d/*.conf` đã nằm trong `.gitignore` |
 | Output của `backup.sh` | stdout chỉ có đúng 1 dòng là tên file. Mọi thông báo ghi ra stderr và file log. Collector dựa vào điều này |
 | Khi sửa code | Chạy lại cả 2 bộ test. Với mỗi lỗi đã sửa, thêm test bắt được lỗi đó và xác nhận test hỏng khi gỡ bản sửa |
+| Khi sửa `setup.md` | Test Docker dựng môi trường đúng theo `setup.md` (user, thư mục, quyền file, lệnh ACL). Sửa tài liệu thì sửa cả test cho khớp |
 
 ## 8. Việc để sau
 

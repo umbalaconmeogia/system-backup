@@ -73,7 +73,7 @@ if [ "$NEED_DB" = 1 ]; then
 fi
 if [ "$NEED_SOURCE" = 1 ]; then
     [ -n "$SOURCE_DIR" ] || die "SOURCE_DIR is not set"
-    [ -d "$SOURCE_DIR" ] || die "SOURCE_DIR not found: $SOURCE_DIR"
+    [ -d "$SOURCE_DIR" ] || die "SOURCE_DIR not found, or user $(id -un) has no permission to access it: $SOURCE_DIR"
     SOURCE_DIR=$(cd "$SOURCE_DIR" && pwd -P)
     case "$BACKUP_DIR/" in
         "$SOURCE_DIR/"*) die "BACKUP_DIR ($BACKUP_DIR) must be outside of SOURCE_DIR ($SOURCE_DIR)" ;;
@@ -179,6 +179,20 @@ script_version=$VERSION
 EOF
 }
 
+# zip does not tell which files it could not read. List them (at most 20) in the log.
+report_unreadable() {
+    local list count
+    list=$(find "$SOURCE_DIR" ! -type l \( ! -readable -o -type d ! -executable \) -print 2> /dev/null || true)
+    count=$(grep -c . <<< "$list" || true)
+    if [ "$count" -eq 0 ]; then
+        log "No unreadable file found now. Some files may have been removed while zipping."
+        return 0
+    fi
+    log "Cannot read $count file(s) or directory(ies) as user $(id -un):"
+    head -n 20 <<< "$list" | while IFS= read -r f; do log "  $f"; done
+    [ "$count" -le 20 ] || log "  ..."
+}
+
 create_zip() {
     local rc=0 parent
     local -a items=("$NAME/manifest.txt")
@@ -197,8 +211,12 @@ create_zip() {
         (cd "$LINK_DIR" && zip -r -y -q "$ZIP_FILE.part" "$NAME/$SOURCE_NAME") >&2 || rc=$?
         if [ $rc -eq 18 ]; then
             # Some files could not be read (no permission, or removed while zipping).
+            report_unreadable
+            if [ "$FAIL_ON_UNREADABLE" = 1 ]; then
+                die "zip could not read some files. Give the user $(id -un) permission to read them, or set FAIL_ON_UNREADABLE=0."
+            fi
             WARNINGS=1
-            log "WARNING: zip could not read some files, the backup may be incomplete."
+            log "WARNING: zip could not read some files, the backup is incomplete."
         elif [ $rc -ne 0 ]; then
             die "zip failed (exit code $rc)"
         fi

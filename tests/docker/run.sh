@@ -100,9 +100,10 @@ as_backup() {
     dc exec -T -u webapp-backup "$1" bash -c "$2"
 }
 
-# put <service> <path> <mode>: write stdin to a file, owned by "webapp-backup" if the user exists.
+# put <service> <path> <mode> [owner]: write stdin to a file.
+# The owner (default root:webapp-backup) is applied only when the user webapp-backup exists, as described in docs/setup.md.
 put() {
-    dc exec -T "$1" bash -c "cat > '$2' && chmod $3 '$2' && { ! id webapp-backup > /dev/null 2>&1 || chown webapp-backup:webapp-backup '$2'; }"
+    dc exec -T "$1" bash -c "cat > '$2' && chmod $3 '$2' && { ! id webapp-backup > /dev/null 2>&1 || chown ${4:-root:webapp-backup} '$2'; }"
 }
 
 mysql_on() {
@@ -193,55 +194,65 @@ mkdir -p /app/public && echo 'root source' > /app/public/index.html && chown -R 
 "
 
 # Config files of the hosts.
-put host $CONF/shop.conf 600 <<'EOF'
+put host $CONF/shop.conf 640 <<'EOF'
 PROJECT=shop
 ENV=prod
-BACKUP_DIR=/var/backup/shop
+BACKUP_DIR=/var/webapp-backup/shop
 DB_TYPE=mysql
 DB_NAME=demo
 DB_CREDENTIAL_FILE=shop.cnf
 SOURCE_DIR=/var/www/demo
 EOF
-put host $CONF/shop.cnf 600 <<'EOF'
+put host $CONF/shop-lenient.conf 640 <<'EOF'
+PROJECT=shop
+ENV=prod
+BACKUP_DIR=/var/webapp-backup/shop
+DB_TYPE=mysql
+DB_NAME=demo
+DB_CREDENTIAL_FILE=shop.cnf
+SOURCE_DIR=/var/www/demo
+FAIL_ON_UNREADABLE=0
+EOF
+put host $CONF/shop.cnf 640 <<'EOF'
 [client]
 host=mysql
 user=backup_user
 password=backup_pw
 EOF
-put host $CONF/shop-restore.conf 600 <<'EOF'
+put host $CONF/shop-restore.conf 640 <<'EOF'
 PROJECT=shop
 ENV=local
-BACKUP_DIR=/var/backup/shop-local
+BACKUP_DIR=/var/webapp-backup/shop-local
 DB_TYPE=mysql
 DB_NAME=demo_restore
 DB_CREDENTIAL_FILE=restore.cnf
 EOF
-put host $CONF/other-restore.conf 600 <<'EOF'
+put host $CONF/other-restore.conf 640 <<'EOF'
 PROJECT=shop
 ENV=local
-BACKUP_DIR=/var/backup/shop-local
+BACKUP_DIR=/var/webapp-backup/shop-local
 DB_TYPE=mysql
 DB_NAME=demo_other
 DB_CREDENTIAL_FILE=restore.cnf
 EOF
-put host $CONF/restore.cnf 600 <<'EOF'
+put host $CONF/restore.cnf 640 <<'EOF'
 [client]
 host=mysql
 user=restore_user
 password=restore_pw
 EOF
-put host $CONF/fallback.conf 600 <<'EOF'
+put host $CONF/fallback.conf 640 <<'EOF'
 PROJECT=shop
 ENV=fallback
-BACKUP_DIR=/var/backup/fallback
+BACKUP_DIR=/var/webapp-backup/fallback
 DB_TYPE=mysql
 DB_NAME=demo
 DB_CREDENTIAL_FILE=shop.cnf
 EOF
-put host $CONF/crm.conf 600 <<'EOF'
+put host $CONF/crm.conf 640 <<'EOF'
 PROJECT=crm
 ENV=prod
-BACKUP_DIR=/var/backup/crm
+BACKUP_DIR=/var/webapp-backup/crm
 DB_TYPE=pgsql
 DB_NAME=demo
 DB_HOST=postgres
@@ -249,52 +260,52 @@ DB_USER=backup_user
 DB_CREDENTIAL_FILE=crm.pgpass
 SOURCE_DIR=/var/www/demo
 EOF
-put host $CONF/crm.pgpass 600 <<'EOF'
+put host $CONF/crm.pgpass 600 webapp-backup:webapp-backup <<'EOF'
 postgres:5432:demo:backup_user:backup_pw
 EOF
-put host $CONF/crm-restore.conf 600 <<'EOF'
+put host $CONF/crm-restore.conf 640 <<'EOF'
 PROJECT=crm
 ENV=local
-BACKUP_DIR=/var/backup/crm-local
+BACKUP_DIR=/var/webapp-backup/crm-local
 DB_TYPE=pgsql
 DB_NAME=demo_restore
 DB_HOST=postgres
 DB_USER=restore_user
 DB_CREDENTIAL_FILE=crm-restore.pgpass
 EOF
-put host $CONF/crm-restore.pgpass 600 <<'EOF'
+put host $CONF/crm-restore.pgpass 600 webapp-backup:webapp-backup <<'EOF'
 postgres:5432:demo_restore:restore_user:restore_pw
 EOF
-put host $CONF/rootsrc.conf 600 <<'EOF'
+put host $CONF/rootsrc.conf 640 <<'EOF'
 PROJECT=rootsrc
 ENV=prod
-BACKUP_DIR=/var/backup/rootsrc
+BACKUP_DIR=/var/webapp-backup/rootsrc
 DB_TYPE=none
 SOURCE_DIR=/app
 EOF
-put host-mariadb $CONF/blog.conf 600 <<'EOF'
+put host-mariadb $CONF/blog.conf 640 <<'EOF'
 PROJECT=blog
 ENV=prod
-BACKUP_DIR=/var/backup/blog
+BACKUP_DIR=/var/webapp-backup/blog
 DB_TYPE=mysql
 DB_NAME=demo
 DB_CREDENTIAL_FILE=blog.cnf
 EOF
-put host-mariadb $CONF/blog.cnf 600 <<'EOF'
+put host-mariadb $CONF/blog.cnf 640 <<'EOF'
 [client]
 host=mariadb
 user=backup_user
 password=backup_pw
 EOF
-put host-mariadb $CONF/blog-restore.conf 600 <<'EOF'
+put host-mariadb $CONF/blog-restore.conf 640 <<'EOF'
 PROJECT=blog
 ENV=local
-BACKUP_DIR=/var/backup/blog-local
+BACKUP_DIR=/var/webapp-backup/blog-local
 DB_TYPE=mysql
 DB_NAME=demo_restore
 DB_CREDENTIAL_FILE=restore.cnf
 EOF
-put host-mariadb $CONF/restore.cnf 600 <<'EOF'
+put host-mariadb $CONF/restore.cnf 640 <<'EOF'
 [client]
 host=mariadb
 user=restore_user
@@ -335,8 +346,8 @@ CRM_DB=$(as_backup host "$BIN/backup.sh --config $CONF/crm.conf db" 2> "$OUT") &
 
 for spec in "MySQL:host:shop:$SHOP_DB" "MariaDB:host-mariadb:blog:$BLOG_DB"; do
     IFS=: read -r label svc project file <<< "$spec"
-    dump="unzip -p /var/backup/$project/$file '${file%.zip}/db.sql'"
-    check "$label: zip has manifest.txt" on "$svc" "unzip -l /var/backup/$project/$file | grep -q '${file%.zip}/manifest.txt'"
+    dump="unzip -p /var/webapp-backup/$project/$file '${file%.zip}/db.sql'"
+    check "$label: zip has manifest.txt" on "$svc" "unzip -l /var/webapp-backup/$project/$file | grep -q '${file%.zip}/manifest.txt'"
     check "$label: dump has the table" on "$svc" "$dump | grep -q 'CREATE TABLE \`item\`'"
     # mariadb-dump does not quote the name of triggers.
     check "$label: dump has the view" on "$svc" "$dump | grep -Eq 'VIEW \`?item_names'"
@@ -344,7 +355,7 @@ for spec in "MySQL:host:shop:$SHOP_DB" "MariaDB:host-mariadb:blog:$BLOG_DB"; do
     check "$label: dump has the trigger" on "$svc" "$dump | grep -Eq 'TRIGGER \`?item_after_insert'"
     check "$label: dump has the event" on "$svc" "$dump | grep -Eq 'EVENT \`?purge_audit'"
 done
-dump="unzip -p /var/backup/crm/$CRM_DB '${CRM_DB%.zip}/db.sql'"
+dump="unzip -p /var/webapp-backup/crm/$CRM_DB '${CRM_DB%.zip}/db.sql'"
 check "PostgreSQL: dump has the table" on host "$dump | grep -q 'CREATE TABLE public.item'"
 check "PostgreSQL: dump has the function" on host "$dump | grep -q 'CREATE FUNCTION public.count_items'"
 
@@ -354,7 +365,7 @@ echo "2. backup.sh full"
 SHOP_FULL=$(as_backup host "$BIN/backup.sh --config $CONF/shop.conf full" 2> "$OUT") && ok "backup succeeds" || ng "backup succeeds"
 check_not "no warning" grep WARNING "$OUT"
 NAME=${SHOP_FULL%.zip}
-on host "rm -rf /tmp/extract && mkdir /tmp/extract && cd /tmp/extract && unzip -q /var/backup/shop/$SHOP_FULL"
+on host "rm -rf /tmp/extract && mkdir /tmp/extract && cd /tmp/extract && unzip -q /var/webapp-backup/shop/$SHOP_FULL"
 check "zip has db.sql" on host "test -s /tmp/extract/$NAME/db.sql"
 check "extracted source is same as original" on host "diff -r --no-dereference /var/www/demo /tmp/extract/$NAME/demo"
 LIST_SRC=$(on host "cd /var/www/demo && find . -printf '%p %y %m %l\n' | sort")
@@ -362,24 +373,24 @@ LIST_ZIP=$(on host "cd /tmp/extract/$NAME/demo && find . -printf '%p %y %m %l\n'
 check_eq "types, permissions and link targets are kept" "$LIST_SRC" "$LIST_ZIP"
 check "empty directory is kept" on host "test -d /tmp/extract/$NAME/demo/empty-dir"
 check "broken link is kept as link" on host "test -L /tmp/extract/$NAME/demo/broken-link"
-check "zip has nothing outside <name>/" on host "! unzip -Z1 /var/backup/shop/$SHOP_FULL | grep -v '^$NAME/'"
+check "zip has nothing outside <name>/" on host "! unzip -Z1 /var/webapp-backup/shop/$SHOP_FULL | grep -v '^$NAME/'"
 
 # --- 3. Source directory directly under / -------------------------------------
 
 echo "3. backup.sh source, SOURCE_DIR=/app"
 ROOT_SRC=$(as_backup host "$BIN/backup.sh --config $CONF/rootsrc.conf source" 2> "$OUT") && ok "backup succeeds" || ng "backup succeeds"
-check "zip has <name>/app/public/index.html" on host "unzip -Z1 /var/backup/rootsrc/$ROOT_SRC | grep -qx '${ROOT_SRC%.zip}/app/public/index.html'"
-check "zip has nothing outside <name>/app" on host "! unzip -Z1 /var/backup/rootsrc/$ROOT_SRC | grep -v '^${ROOT_SRC%.zip}/\(manifest.txt\|app/.*\)$'"
+check "zip has <name>/app/public/index.html" on host "unzip -Z1 /var/webapp-backup/rootsrc/$ROOT_SRC | grep -qx '${ROOT_SRC%.zip}/app/public/index.html'"
+check "zip has nothing outside <name>/app" on host "! unzip -Z1 /var/webapp-backup/rootsrc/$ROOT_SRC | grep -v '^${ROOT_SRC%.zip}/\(manifest.txt\|app/.*\)$'"
 
 # --- 4. Restore into an empty database ----------------------------------------
 
 echo "4. restore.sh (user with privileges on the target database only, other definer)"
 # MySQL 8 enables binary logging by default. Then only an administrator can create triggers.
 check_not "MySQL: restore by a normal user fails when binary logging is enabled" \
-    as_backup host "$BIN/restore.sh --config $CONF/shop-restore.conf --yes /var/backup/shop/$SHOP_DB"
+    as_backup host "$BIN/restore.sh --config $CONF/shop-restore.conf --yes /var/webapp-backup/shop/$SHOP_DB"
 check "MySQL: hint is shown" grep -q "log_bin_trust_function_creators" "$OUT"
 mysql_on mysql -e "DROP DATABASE demo_restore; CREATE DATABASE demo_restore CHARACTER SET utf8mb4; SET GLOBAL log_bin_trust_function_creators = 1"
-check "MySQL: restore succeeds" as_backup host "$BIN/restore.sh --config $CONF/shop-restore.conf --yes /var/backup/shop/$SHOP_DB"
+check "MySQL: restore succeeds" as_backup host "$BIN/restore.sh --config $CONF/shop-restore.conf --yes /var/webapp-backup/shop/$SHOP_DB"
 check_eq "MySQL: data is same as source" "$(mysql_dump_data mysql demo)" "$(mysql_dump_data mysql demo_restore)"
 check_eq "MySQL: binary data is kept" "$BYTES" "$(mysql_on mysql -N -B demo_restore -e 'SELECT HEX(data) FROM item WHERE id = 5')"
 check_eq "MySQL: procedure works" "5" "$(mysql_on mysql -N -B demo_restore -e 'CALL count_items(@n); SELECT @n')"
@@ -389,25 +400,25 @@ mysql_on mysql demo_restore -e "INSERT INTO item (id, name) VALUES (100, 'new')"
 check_eq "MySQL: trigger works" "1" "$(mysql_on mysql -N -B demo_restore -e 'SELECT COUNT(*) FROM audit WHERE item_id = 100')"
 check_eq "MySQL: event exists" "1" "$(mysql_on mysql -N -B demo_restore -e "SELECT COUNT(*) FROM information_schema.EVENTS WHERE EVENT_SCHEMA = 'demo_restore'")"
 check_not "MySQL: --as-is fails when the definer cannot be used" \
-    as_backup host "$BIN/restore.sh --config $CONF/shop-restore.conf --yes --as-is /var/backup/shop/$SHOP_DB"
+    as_backup host "$BIN/restore.sh --config $CONF/shop-restore.conf --yes --as-is /var/webapp-backup/shop/$SHOP_DB"
 
-check "MariaDB: restore succeeds" as_backup host-mariadb "$BIN/restore.sh --config $CONF/blog-restore.conf --yes /var/backup/blog/$BLOG_DB"
+check "MariaDB: restore succeeds" as_backup host-mariadb "$BIN/restore.sh --config $CONF/blog-restore.conf --yes /var/webapp-backup/blog/$BLOG_DB"
 check_eq "MariaDB: data is same as source" "$(mysql_dump_data mariadb demo)" "$(mysql_dump_data mariadb demo_restore)"
 check_eq "MariaDB: procedure works" "5" "$(mysql_on mariadb -N -B demo_restore -e 'CALL count_items(@n); SELECT @n')"
 
-check "PostgreSQL: restore succeeds" as_backup host "$BIN/restore.sh --config $CONF/crm-restore.conf --yes /var/backup/crm/$CRM_DB"
+check "PostgreSQL: restore succeeds" as_backup host "$BIN/restore.sh --config $CONF/crm-restore.conf --yes /var/webapp-backup/crm/$CRM_DB"
 check_eq "PostgreSQL: data is same as source" "$(pgsql_dump_data demo)" "$(pgsql_dump_data demo_restore)"
 check_eq "PostgreSQL: function works" "5" "$(psql_on -d demo_restore -At -c 'SELECT count_items()')"
 check_eq "PostgreSQL: view works" "5" "$(psql_on -d demo_restore -At -c 'SELECT count(*) FROM item_names')"
 check_eq "PostgreSQL: owner is the restore user" "restore_user" \
     "$(psql_on -d demo_restore -At -c "SELECT tableowner FROM pg_tables WHERE tablename = 'item'")"
 check_not "PostgreSQL: --as-is fails when the owner cannot be used" \
-    as_backup host "$BIN/restore.sh --config $CONF/crm-restore.conf --yes --as-is /var/backup/crm/$CRM_DB"
+    as_backup host "$BIN/restore.sh --config $CONF/crm-restore.conf --yes --as-is /var/webapp-backup/crm/$CRM_DB"
 
 # --- 5. Dump of MariaDB, restored by the client of MySQL ----------------------
 
 echo "5. MariaDB dump restored into MySQL"
-on host-mariadb "cp /var/backup/blog/$BLOG_DB /exchange/ && chmod 644 /exchange/$BLOG_DB"
+on host-mariadb "cp /var/webapp-backup/blog/$BLOG_DB /exchange/ && chmod 644 /exchange/$BLOG_DB"
 if on host "unzip -p /exchange/$BLOG_DB '${BLOG_DB%.zip}/db.sql' | head -n 1 | grep -q 'sandbox mode'"; then
     echo "  (info) the dump starts with the sandbox mode line"
 fi
@@ -482,16 +493,16 @@ check "labeled backup is pulled" on collector "test -f /backup/shop/$MANUAL"
 
 echo "10. backup.sh --if-missing"
 FIRST=$(as_backup host "$BIN/backup.sh --config $CONF/fallback.conf --if-missing db" 2> "$OUT")
-check "first run creates a backup" on host "test -f /var/backup/fallback/$FIRST"
+check "first run creates a backup" on host "test -f /var/webapp-backup/fallback/$FIRST"
 SECOND=$(as_backup host "$BIN/backup.sh --config $CONF/fallback.conf --if-missing db" 2> "$OUT")
 check_eq "second run does nothing" "" "$SECOND"
-check_eq "only one backup exists" "1" "$(on host 'ls /var/backup/fallback/*.zip | wc -l' | tr -d ' ')"
+check_eq "only one backup exists" "1" "$(on host 'ls /var/webapp-backup/fallback/*.zip | wc -l' | tr -d ' ')"
 
 # --- 11. Two backups at the same time -----------------------------------------
 
 echo "11. Lock"
 check_not "second backup is refused while one is running" as_backup host "
-    flock /var/backup/shop/.backup.lock sleep 4 &
+    flock /var/webapp-backup/shop/.backup.lock sleep 4 &
     sleep 1
     $BIN/backup.sh --config $CONF/shop.conf db
     rc=\$?
@@ -503,16 +514,53 @@ check "reason is reported" grep -q "Another backup is running" "$OUT"
 
 echo "12. Unreadable file in the source directory"
 on host "echo secret > /var/www/demo/root-only.txt && chmod 600 /var/www/demo/root-only.txt"
-WARN_FULL=$(as_backup host "$BIN/backup.sh --config $CONF/shop.conf full" 2> "$OUT") && ok "backup succeeds" || ng "backup succeeds"
+ZIPS_BEFORE=$(on host "ls /var/webapp-backup/shop/*.zip | wc -l")
+check_not "FAIL_ON_UNREADABLE=1 (default): backup fails" as_backup host "$BIN/backup.sh --config $CONF/shop.conf full"
+check "FAIL_ON_UNREADABLE=1: the unreadable file is listed" grep -q "/var/www/demo/root-only.txt" "$OUT"
+check_eq "FAIL_ON_UNREADABLE=1: no backup file is left" "$ZIPS_BEFORE" "$(on host "ls /var/webapp-backup/shop/*.zip | wc -l")"
+check_not "FAIL_ON_UNREADABLE=1: collect fails" on collector "$COLLECT shop full"
+check_eq "FAIL_ON_UNREADABLE=1: failure is pinged to Healthchecks" "fail True" "$(hc_pings shop-prod-full | tail -n 1 | cut -d' ' -f1,3)"
+WARN_FULL=$(as_backup host "$BIN/backup.sh --config $CONF/shop-lenient.conf full" 2> "$OUT") && ok "FAIL_ON_UNREADABLE=0: backup succeeds" || ng "FAIL_ON_UNREADABLE=0: backup succeeds"
 check "warning is reported" grep -q "WARNING" "$OUT"
-check_not "unreadable file is not in the zip" on host "unzip -Z1 /var/backup/shop/$WARN_FULL | grep -q root-only.txt"
-check "readable files are in the zip" on host "unzip -Z1 /var/backup/shop/$WARN_FULL | grep -q 'demo/index.php'"
+check_not "unreadable file is not in the zip" on host "unzip -Z1 /var/webapp-backup/shop/$WARN_FULL | grep -q root-only.txt"
+check "readable files are in the zip" on host "unzip -Z1 /var/webapp-backup/shop/$WARN_FULL | grep -q 'demo/index.php'"
 on host "rm -f /var/www/demo/root-only.txt"
 
-# --- 13. Large database (optional) --------------------------------------------
+# --- 13. Source directory owned by another user, shared with ACL -------------
+
+echo "13. Source directory owned by another user (ACL, docs/setup.md 1.2)"
+SRC=/home/deploy/example.com
+on host "useradd -m -s /bin/bash deploy && chmod 750 /home/deploy
+    su deploy -c 'mkdir -p $SRC && echo code > $SRC/index.php && echo secret > $SRC/.env && chmod 600 $SRC/.env'"
+put host $CONF/acl.conf 640 <<EOF
+PROJECT=acl
+ENV=prod
+BACKUP_DIR=/var/webapp-backup/acl
+DB_TYPE=none
+SOURCE_DIR=$SRC
+EOF
+check_not "without ACL: backup fails" as_backup host "$BIN/backup.sh --config $CONF/acl.conf source"
+check "without ACL: the reason is reported" grep -q "no permission to access" "$OUT"
+# The commands written in docs/setup.md.
+on host "setfacl -m u:webapp-backup:x /home/deploy
+    setfacl -R -m u:webapp-backup:rX $SRC
+    setfacl -R -d -m u:webapp-backup:rX $SRC"
+ACL_ZIP=$(as_backup host "$BIN/backup.sh --config $CONF/acl.conf source" 2> "$OUT") && ok "with ACL: backup succeeds" || ng "with ACL: backup succeeds"
+check "with ACL: private file (600) is backed up" on host "unzip -Z1 /var/webapp-backup/acl/$ACL_ZIP | grep -q 'example.com/.env'"
+check_not "with ACL: home directory of the owner cannot be listed" as_backup host "ls /home/deploy"
+on host "su deploy -c 'umask 077; mkdir $SRC/uploads && echo img > $SRC/uploads/a.jpg'"
+ACL_ZIP=$(as_backup host "$BIN/backup.sh --config $CONF/acl.conf source" 2> "$OUT") && ok "file created later: backup succeeds" || ng "file created later: backup succeeds"
+check "file created later is in the zip" on host "unzip -Z1 /var/webapp-backup/acl/$ACL_ZIP | grep -q 'uploads/a.jpg'"
+on host "su deploy -c 'chmod 600 $SRC/index.php'"
+check_not "file changed by chmod 600: backup fails" as_backup host "$BIN/backup.sh --config $CONF/acl.conf source"
+check "file changed by chmod 600: the file is listed" grep -q "$SRC/index.php" "$OUT"
+on host "setfacl -R -m u:webapp-backup:rX $SRC"
+check "after running setfacl again: backup succeeds" as_backup host "$BIN/backup.sh --config $CONF/acl.conf source"
+
+# --- 14. Large database (optional) --------------------------------------------
 
 if [ "$LARGE_MB" -gt 0 ]; then
-    echo "13. Large database (about ${LARGE_MB}MB)"
+    echo "14. Large database (about ${LARGE_MB}MB)"
     mysql_on mysql demo -e "
         CREATE TABLE big (id INT AUTO_INCREMENT PRIMARY KEY, payload VARCHAR(1000));
         SET SESSION cte_max_recursion_depth = 10000000;
@@ -521,7 +569,7 @@ if [ "$LARGE_MB" -gt 0 ]; then
             SELECT REPEAT(MD5(n), 30) FROM s;"
     START_TIME=$(date +%s)
     check "backup succeeds" as_backup host "$BIN/backup.sh --config $CONF/shop.conf db"
-    echo "  (info) backup took $(( $(date +%s) - START_TIME ))s, size: $(on host 'ls -lh /var/backup/shop/*.zip | tail -n 1 | awk "{print \$5}"')"
+    echo "  (info) backup took $(( $(date +%s) - START_TIME ))s, size: $(on host 'ls -lh /var/webapp-backup/shop/*.zip | tail -n 1 | awk "{print \$5}"')"
     mysql_on mysql demo -e "DROP TABLE big"
 fi
 

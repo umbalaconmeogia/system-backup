@@ -13,35 +13,71 @@ sudo apt install zip unzip          # Ubuntu
 sudo dnf install zip unzip          # Amazon Linux
 ```
 
-Copy the directory `host/` to `/opt/webapp-backup/host`.
+Copy the directory `host/` to `/opt/webapp-backup/host`. The scripts must be owned by root,
+so that the user of the backup cannot modify them, in particular `ssh-gate.sh`, which limits what the backup server can do.
 
 ```bash
-chmod +x /opt/webapp-backup/host/*.sh
+sudo chown -R root:root /opt/webapp-backup
+sudo chmod 755 /opt/webapp-backup/host/*.sh
 ```
 
 ### 1.2. User
 
 All scripts on the host (triggered by the backup server, or by cron) must run as the same user.
 This user needs permission to read all files of the source directory.
+If some files cannot be read, the backup fails and the files are listed in the log (see `FAIL_ON_UNREADABLE` in `backup.conf`).
 
 Create a dedicated user with a login shell. The backup server connects as this user, and SSH runs `ssh-gate.sh` through its shell.
 Do not use the user `backup`: it already exists on Ubuntu and Debian, with the shell `/usr/sbin/nologin`.
 
 ```bash
 sudo useradd -m -s /bin/bash webapp-backup
-sudo install -d -o webapp-backup -g webapp-backup /var/backup
+sudo install -d -m 700 -o webapp-backup -g webapp-backup /var/webapp-backup
 ```
+
+#### Source directory owned by another user
+
+When the source directory belongs to another user, for example `/home/deploy/example.com`,
+give `webapp-backup` the permission to read it with ACL (Access Control List).
+ACL adds a permission for one more user to files and directories, without changing the permissions of the owner and of other users.
+
+```bash
+sudo apt install acl                                                   # Amazon Linux: sudo dnf install acl
+sudo setfacl -m u:webapp-backup:x /home/deploy
+sudo setfacl -R -m u:webapp-backup:rX /home/deploy/example.com
+sudo setfacl -R -d -m u:webapp-backup:rX /home/deploy/example.com
+```
+
+| Command | Effect |
+|---|---|
+| `setfacl -m u:webapp-backup:x /home/deploy` | `webapp-backup` can pass through the home directory, but cannot list its files. Needed for each directory on the path that does not allow it (on Ubuntu, home directories have the permission `750`) |
+| `setfacl -R -m u:webapp-backup:rX ...` | `webapp-backup` can read all existing files. `X` (upper case) allows entering directories, not executing files |
+| `setfacl -R -d -m u:webapp-backup:rX ...` | Default ACL: files and directories created later can also be read |
+
+The default ACL does not apply in a few cases: a file whose permission is changed later (for example `chmod 600`),
+and a private file moved (`mv`) or copied with `cp -p` into the source directory.
+Then the backup fails, and the files are listed in the log. Run `sudo setfacl -R -m u:webapp-backup:rX /home/deploy/example.com` again to fix it.
 
 ### 1.3. Config
 
 ```bash
 cd /opt/webapp-backup/host
-cp backup.conf.example backup.conf
-cp my.cnf.example my.cnf            # PostgreSQL: cp pgpass.example pgpass
-chmod 600 backup.conf my.cnf
+sudo cp backup.conf.example backup.conf
+sudo cp my.cnf.example my.cnf
+sudo chown root:webapp-backup backup.conf my.cnf
+sudo chmod 640 backup.conf my.cnf
 ```
 
-Edit `backup.conf` and `my.cnf`. `BACKUP_DIR` must be outside of `SOURCE_DIR`.
+The user `webapp-backup` can read the config files, but cannot modify them. Other users cannot read them.
+
+For PostgreSQL, create `pgpass` instead of `my.cnf`. It must be owned by `webapp-backup` with the permission `600`:
+the client of PostgreSQL ignores the file if its group can read it.
+
+```bash
+sudo install -o webapp-backup -g webapp-backup -m 600 pgpass.example pgpass
+```
+
+Edit `backup.conf` and `my.cnf` (or `pgpass`) with `sudo`. `BACKUP_DIR` must be outside of `SOURCE_DIR`.
 
 The database user needs permission to dump the database.
 
@@ -64,7 +100,7 @@ Older MariaDB: replace `SHOW CREATE ROUTINE ON example_db.*` by `GRANT SELECT ON
 the dump succeeds, without any error or warning. Check it once after setup:
 
 ```bash
-unzip -p /var/backup/example/<backup file>.zip '*/db.sql' | grep -E 'CREATE .*(PROCEDURE|FUNCTION)'
+unzip -p /var/webapp-backup/example/<backup file>.zip '*/db.sql' | grep -E 'CREATE .*(PROCEDURE|FUNCTION)'
 ```
 
 `PROCESS` is also needed if `--no-tablespaces` is removed from the dump options.
@@ -83,7 +119,7 @@ The version of `pg_dump` on the host must not be older than the PostgreSQL serve
 ```bash
 ./backup.sh db
 ./backup.sh full
-ls -l /var/backup/example
+ls -l /var/webapp-backup/example
 ```
 
 ### 1.5. Allow the backup server to connect
@@ -235,7 +271,7 @@ The user also needs all privileges on the target database. If it cannot create d
 ### 4.3. Rebuild the server
 
 ```bash
-cd /var/backup/example
+cd /var/webapp-backup/example
 unzip example_prod_full_20260928_010000.zip
 /opt/webapp-backup/host/restore.sh --as-is example_prod_full_20260928_010000
 cp -a example_prod_full_20260928_010000/example /var/www/

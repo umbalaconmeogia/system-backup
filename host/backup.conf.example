@@ -6,7 +6,7 @@ PROJECT=example
 ENV=prod
 
 # Where to store backup files. Must be outside of SOURCE_DIR.
-BACKUP_DIR=/var/backup/example
+BACKUP_DIR=/var/webapp-backup/example
 
 # Database: mysql, pgsql or none.
 DB_TYPE=mysql
@@ -21,6 +21,10 @@ DB_CREDENTIAL_FILE=my.cnf
 
 # Source directory. All files are backed up, nothing is excluded.
 SOURCE_DIR=/var/www/example
+
+# 1: The backup fails when some files of SOURCE_DIR cannot be read, the files are listed in the log.
+# 0: The backup is created without those files, with a warning.
+FAIL_ON_UNREADABLE=1
 
 # Delete automatic backups older than KEEP_DAYS, but keep at least KEEP_MIN files of each type.
 # Labeled backups are never deleted.

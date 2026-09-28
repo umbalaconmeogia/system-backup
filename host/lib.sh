@@ -41,6 +41,7 @@ load_config() {
     : "${SOURCE_DIR:=}"
     : "${KEEP_DAYS:=30}"
     : "${KEEP_MIN:=7}"
+    : "${FAIL_ON_UNREADABLE:=1}"
     : "${NOTIFY_SLACK_WEBHOOK:=}"
     : "${NOTIFY_MAIL:=}"
 

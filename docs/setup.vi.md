@@ -13,35 +13,71 @@ sudo apt install zip unzip          # Ubuntu
 sudo dnf install zip unzip          # Amazon Linux
 ```
 
-Copy thư mục `host/` vào `/opt/webapp-backup/host`.
+Copy thư mục `host/` vào `/opt/webapp-backup/host`. Các script phải thuộc về root,
+để user chạy backup không sửa được chúng, nhất là `ssh-gate.sh`, script giới hạn những gì backup server được làm.
 
 ```bash
-chmod +x /opt/webapp-backup/host/*.sh
+sudo chown -R root:root /opt/webapp-backup
+sudo chmod 755 /opt/webapp-backup/host/*.sh
 ```
 
 ### 1.2. User
 
 Mọi script trên host (do backup server kích hoạt, hoặc do cron chạy) phải chạy bằng cùng một user.
 User này cần quyền đọc toàn bộ file trong thư mục source.
+Nếu có file không đọc được, việc backup thất bại và danh sách các file đó được ghi vào log (xem `FAIL_ON_UNREADABLE` trong `backup.conf`).
 
 Hãy tạo một user riêng có shell đăng nhập. Backup server kết nối bằng user này, và SSH chạy `ssh-gate.sh` thông qua shell của nó.
 Không dùng user `backup`: user này đã có sẵn trên Ubuntu và Debian, với shell `/usr/sbin/nologin`.
 
 ```bash
 sudo useradd -m -s /bin/bash webapp-backup
-sudo install -d -o webapp-backup -g webapp-backup /var/backup
+sudo install -d -m 700 -o webapp-backup -g webapp-backup /var/webapp-backup
 ```
+
+#### Thư mục source thuộc về user khác
+
+Khi thư mục source thuộc về một user khác, ví dụ `/home/deploy/example.com`,
+hãy cấp cho `webapp-backup` quyền đọc bằng ACL (Access Control List).
+ACL thêm quyền cho một user nữa trên file và thư mục, mà không thay đổi quyền của chủ sở hữu và của các user khác.
+
+```bash
+sudo apt install acl                                                   # Amazon Linux: sudo dnf install acl
+sudo setfacl -m u:webapp-backup:x /home/deploy
+sudo setfacl -R -m u:webapp-backup:rX /home/deploy/example.com
+sudo setfacl -R -d -m u:webapp-backup:rX /home/deploy/example.com
+```
+
+| Lệnh | Tác dụng |
+|---|---|
+| `setfacl -m u:webapp-backup:x /home/deploy` | `webapp-backup` được đi qua thư mục home, nhưng không xem được danh sách file trong đó. Cần làm với mỗi thư mục trên đường dẫn chưa cho phép điều này (trên Ubuntu, thư mục home có quyền `750`) |
+| `setfacl -R -m u:webapp-backup:rX ...` | `webapp-backup` đọc được mọi file hiện có. `X` (viết hoa) cho phép vào thư mục, không cho chạy file |
+| `setfacl -R -d -m u:webapp-backup:rX ...` | ACL mặc định: file và thư mục tạo sau này cũng đọc được |
+
+ACL mặc định không có tác dụng trong vài trường hợp: file bị đổi quyền sau khi tạo (ví dụ `chmod 600`),
+và file riêng tư được chuyển (`mv`) hoặc copy bằng `cp -p` vào thư mục source.
+Khi đó backup thất bại và các file đó được liệt kê trong log. Chạy lại `sudo setfacl -R -m u:webapp-backup:rX /home/deploy/example.com` để khắc phục.
 
 ### 1.3. Config
 
 ```bash
 cd /opt/webapp-backup/host
-cp backup.conf.example backup.conf
-cp my.cnf.example my.cnf            # PostgreSQL: cp pgpass.example pgpass
-chmod 600 backup.conf my.cnf
+sudo cp backup.conf.example backup.conf
+sudo cp my.cnf.example my.cnf
+sudo chown root:webapp-backup backup.conf my.cnf
+sudo chmod 640 backup.conf my.cnf
 ```
 
-Sửa `backup.conf` và `my.cnf`. `BACKUP_DIR` phải nằm ngoài `SOURCE_DIR`.
+User `webapp-backup` đọc được các file config nhưng không sửa được. User khác không đọc được.
+
+Với PostgreSQL, tạo `pgpass` thay cho `my.cnf`. File này phải thuộc về `webapp-backup` với quyền `600`:
+client của PostgreSQL bỏ qua file nếu group của nó có quyền đọc.
+
+```bash
+sudo install -o webapp-backup -g webapp-backup -m 600 pgpass.example pgpass
+```
+
+Sửa `backup.conf` và `my.cnf` (hoặc `pgpass`) bằng `sudo`. `BACKUP_DIR` phải nằm ngoài `SOURCE_DIR`.
 
 User của database cần quyền để dump database.
 
@@ -64,7 +100,7 @@ MariaDB cũ hơn: thay `SHOW CREATE ROUTINE ON example_db.*` bằng `GRANT SELEC
 việc dump vẫn thành công, không có lỗi hay cảnh báo. Hãy kiểm tra một lần sau khi cài đặt:
 
 ```bash
-unzip -p /var/backup/example/<backup file>.zip '*/db.sql' | grep -E 'CREATE .*(PROCEDURE|FUNCTION)'
+unzip -p /var/webapp-backup/example/<backup file>.zip '*/db.sql' | grep -E 'CREATE .*(PROCEDURE|FUNCTION)'
 ```
 
 Cần thêm quyền `PROCESS` nếu bỏ `--no-tablespaces` khỏi tham số dump.
@@ -83,7 +119,7 @@ Phiên bản `pg_dump` trên host không được cũ hơn PostgreSQL server
 ```bash
 ./backup.sh db
 ./backup.sh full
-ls -l /var/backup/example
+ls -l /var/webapp-backup/example
 ```
 
 ### 1.5. Cho phép backup server kết nối
@@ -235,7 +271,7 @@ User cũng cần toàn quyền trên database đích. Nếu user không tạo đ
 ### 4.3. Dựng lại server
 
 ```bash
-cd /var/backup/example
+cd /var/webapp-backup/example
 unzip example_prod_full_20260928_010000.zip
 /opt/webapp-backup/host/restore.sh --as-is example_prod_full_20260928_010000
 cp -a example_prod_full_20260928_010000/example /var/www/

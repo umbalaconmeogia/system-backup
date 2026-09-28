@@ -13,35 +13,71 @@ sudo apt install zip unzip          # Ubuntu
 sudo dnf install zip unzip          # Amazon Linux
 ```
 
-ディレクトリ `host/` を `/opt/webapp-backup/host` にコピーします。
+ディレクトリ `host/` を `/opt/webapp-backup/host` にコピーします。スクリプトの所有者は root にしてください。
+バックアップを実行するユーザーがスクリプトを変更できないようにするためです。特に `ssh-gate.sh` は、バックアップサーバーにできることを制限しています。
 
 ```bash
-chmod +x /opt/webapp-backup/host/*.sh
+sudo chown -R root:root /opt/webapp-backup
+sudo chmod 755 /opt/webapp-backup/host/*.sh
 ```
 
 ### 1.2. ユーザー
 
 ホスト上のすべてのスクリプト（バックアップサーバーから起動されるもの、cron で実行されるもの）は、同じユーザーで実行する必要があります。
 このユーザーには、ソースディレクトリのすべてのファイルを読む権限が必要です。
+読めないファイルがあるとバックアップは失敗し、それらのファイルがログに出力されます（`backup.conf` の `FAIL_ON_UNREADABLE` を参照）。
 
 ログインシェルを持つ専用ユーザーを作成してください。バックアップサーバーはこのユーザーで接続し、SSH はそのシェルを通して `ssh-gate.sh` を実行します。
 ユーザー `backup` は使わないでください。Ubuntu と Debian には既に存在し、シェルが `/usr/sbin/nologin` になっています。
 
 ```bash
 sudo useradd -m -s /bin/bash webapp-backup
-sudo install -d -o webapp-backup -g webapp-backup /var/backup
+sudo install -d -m 700 -o webapp-backup -g webapp-backup /var/webapp-backup
 ```
+
+#### 他のユーザーが所有するソースディレクトリ
+
+ソースディレクトリが他のユーザーのもの（例：`/home/deploy/example.com`）である場合は、
+ACL（Access Control List）で `webapp-backup` に読み取り権限を与えます。
+ACL は、所有者や他のユーザーのパーミッションを変えずに、ファイルとディレクトリに特定のユーザーの権限を追加します。
+
+```bash
+sudo apt install acl                                                   # Amazon Linux: sudo dnf install acl
+sudo setfacl -m u:webapp-backup:x /home/deploy
+sudo setfacl -R -m u:webapp-backup:rX /home/deploy/example.com
+sudo setfacl -R -d -m u:webapp-backup:rX /home/deploy/example.com
+```
+
+| コマンド | 効果 |
+|---|---|
+| `setfacl -m u:webapp-backup:x /home/deploy` | `webapp-backup` はホームディレクトリを通過できますが、中のファイル一覧は見られません。パス上でこれを許可していない各ディレクトリに必要です（Ubuntu のホームディレクトリのパーミッションは `750`） |
+| `setfacl -R -m u:webapp-backup:rX ...` | `webapp-backup` は既存のすべてのファイルを読めます。`X`（大文字）はディレクトリへの移動だけを許可し、ファイルの実行は許可しません |
+| `setfacl -R -d -m u:webapp-backup:rX ...` | デフォルト ACL：後から作成されるファイルとディレクトリも読めます |
+
+デフォルト ACL が効かない場合がいくつかあります：作成後にパーミッションが変更されたファイル（例：`chmod 600`）、
+非公開のファイルを `mv` で移動した場合や `cp -p` でソースディレクトリにコピーした場合です。
+そのときはバックアップが失敗し、該当ファイルがログに出力されます。`sudo setfacl -R -m u:webapp-backup:rX /home/deploy/example.com` を再実行して対処してください。
 
 ### 1.3. 設定
 
 ```bash
 cd /opt/webapp-backup/host
-cp backup.conf.example backup.conf
-cp my.cnf.example my.cnf            # PostgreSQL: cp pgpass.example pgpass
-chmod 600 backup.conf my.cnf
+sudo cp backup.conf.example backup.conf
+sudo cp my.cnf.example my.cnf
+sudo chown root:webapp-backup backup.conf my.cnf
+sudo chmod 640 backup.conf my.cnf
 ```
 
-`backup.conf` と `my.cnf` を編集します。`BACKUP_DIR` は `SOURCE_DIR` の外に置く必要があります。
+ユーザー `webapp-backup` は設定ファイルを読めますが、変更はできません。他のユーザーは読めません。
+
+PostgreSQL の場合は、`my.cnf` の代わりに `pgpass` を作成します。所有者は `webapp-backup`、パーミッションは `600` にしてください。
+グループが読める状態だと、PostgreSQL のクライアントはこのファイルを無視します。
+
+```bash
+sudo install -o webapp-backup -g webapp-backup -m 600 pgpass.example pgpass
+```
+
+`backup.conf` と `my.cnf`（または `pgpass`）は `sudo` で編集します。`BACKUP_DIR` は `SOURCE_DIR` の外に置く必要があります。
 
 データベースのユーザーには、データベースをダンプする権限が必要です。
 
@@ -64,7 +100,7 @@ GRANT SELECT, SHOW VIEW, TRIGGER, EVENT, LOCK TABLES, SHOW CREATE ROUTINE ON exa
 ダンプはエラーも警告もなく成功します。セットアップ後に一度確認してください：
 
 ```bash
-unzip -p /var/backup/example/<backup file>.zip '*/db.sql' | grep -E 'CREATE .*(PROCEDURE|FUNCTION)'
+unzip -p /var/webapp-backup/example/<backup file>.zip '*/db.sql' | grep -E 'CREATE .*(PROCEDURE|FUNCTION)'
 ```
 
 ダンプのオプションから `--no-tablespaces` を外す場合は、`PROCESS` 権限も必要です。
@@ -83,7 +119,7 @@ GRANT pg_read_all_data TO backup_user;
 ```bash
 ./backup.sh db
 ./backup.sh full
-ls -l /var/backup/example
+ls -l /var/webapp-backup/example
 ```
 
 ### 1.5. バックアップサーバーからの接続を許可する
@@ -235,7 +271,7 @@ SET PERSIST log_bin_trust_function_creators = 1;
 ### 4.3. サーバーの再構築
 
 ```bash
-cd /var/backup/example
+cd /var/webapp-backup/example
 unzip example_prod_full_20260928_010000.zip
 /opt/webapp-backup/host/restore.sh --as-is example_prod_full_20260928_010000
 cp -a example_prod_full_20260928_010000/example /var/www/
