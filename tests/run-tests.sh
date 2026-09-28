@@ -81,8 +81,13 @@ esac
 EOF
 
 # ssh: run the forced command locally, as sshd does with command="..." in authorized_keys.
+# Like the real ssh, it reads stdin unless -n is given.
 cat > "$T/bin/ssh" <<'EOF'
 #!/usr/bin/env bash
+case " $* " in
+    *" -n "*) ;;
+    *) cat > /dev/null ;;
+esac
 if [ -f "$TEST_DIR/ssh_fail" ]; then
     echo "ssh: connect to host: Connection timed out" >&2
     exit 255
@@ -126,7 +131,7 @@ cat > "$T/collector/projects.d/demo.conf" <<EOF
 PROJECT=demo
 ENV=prod
 SSH_HOST=host.example.com
-SSH_USER=backup
+SSH_USER=webapp-backup
 SSH_KEY=$T/key
 LOCAL_DIR=$T/collected
 KEEP_DAYS=365

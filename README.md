@@ -1,3 +1,5 @@
+[English](README.md) | [日本語](README.ja.md) | [Tiếng Việt](README.vi.md)
+
 # webapp-backup
 
 Scripts for backing up database and source code of running systems, and collecting the backup files
@@ -29,8 +31,8 @@ collect.sh example db
 |---|---|---|
 | [host/](host) | Host | Create backup, restore, SSH gate |
 | [collector/](collector) | Backup server | Trigger backup, pull files, report |
-| [tests/](tests) | Anywhere | Tests (no database, no network needed) |
-| [docs/](docs) | | [Setup guide](docs/setup.md). In Vietnamese: [specification](docs/spec.md), [handover notes](docs/handover.md) |
+| [tests/](tests) | Anywhere | Unit test with stubs, integration test with Docker |
+| [docs/](docs) | | [Setup guide](docs/setup.md). In Vietnamese: [specification](docs/spec.md), [handover notes](docs/handover.md), [development notes](docs/dev-note.md) |
 
 ## Backup file
 
@@ -77,6 +79,14 @@ See [setup guide](docs/setup.md) for installation.
 
 ## Test
 
+Unit test. Database clients, ssh and curl are replaced by stubs, so no database and no network are needed:
+
 ```bash
 bash tests/run-tests.sh
+```
+
+Integration test with real MySQL, MariaDB, PostgreSQL, sshd and Healthchecks. Docker is needed:
+
+```bash
+bash tests/docker/run.sh
 ```

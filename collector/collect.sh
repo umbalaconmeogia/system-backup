@@ -151,7 +151,8 @@ remote() {
     if [ -n "$SSH_OPTIONS" ]; then
         read -r -a opts <<< "$SSH_OPTIONS"
     fi
-    ssh -i "$SSH_KEY" -p "$SSH_PORT" -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=20 \
+    # -n: ssh must not read stdin, which is the list of files in sync_files().
+    ssh -n -i "$SSH_KEY" -p "$SSH_PORT" -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=20 \
         -o ServerAliveInterval=60 -o ServerAliveCountMax=5 ${opts[@]+"${opts[@]}"} \
         "$SSH_USER@$SSH_HOST" "$@"
 }

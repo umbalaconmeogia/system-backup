@@ -10,3 +10,4 @@
 *.zip
 *.zip.sha256
 *.sql
+!/tests/docker/fixtures/*.sql

@@ -143,7 +143,11 @@ restore.sh [--config FILE] [--as-is] [--yes] <thư mục backup | file zip | db.
 * DB đích lấy từ config của môi trường restore, không lấy từ file backup.
 * Mặc định, dump được điều chỉnh để restore sang môi trường khác (ví dụ máy local):
   * MySQL: thay `DEFINER=...` bằng `DEFINER=CURRENT_USER`.
+  * MySQL: bỏ `NO_AUTO_CREATE_USER` khỏi `sql_mode` của routine và trigger (MariaDB giữ, MySQL 8 không chấp nhận).
+  * MySQL: nếu server đích không có collation `utf8mb4_uca1400_*` (mặc định của MariaDB 11.4 trở lên),
+    thay bằng `utf8mb4_0900_*`, hoặc `utf8mb4_unicode_ci` nếu server đích cũng không có `utf8mb4_0900_*`.
   * PostgreSQL: bỏ các lệnh `OWNER TO`, `GRANT`, `REVOKE`.
+* Khi restore thất bại với lỗi đã biết (ví dụ `ERROR 1419` do binary log của MySQL), in gợi ý cách xử lý.
 * `--as-is`: restore nguyên bản, dùng khi dựng lại chính server gốc.
 * Luôn bỏ dòng đầu `/*!999999\- enable the sandbox mode */` do mariadb-dump sinh ra (MySQL).
 * Trên Windows dùng `restore.bat` (gọi `restore.ps1`): `restore.bat [-Config FILE] [-AsIs] [-Yes] <đường dẫn>`.

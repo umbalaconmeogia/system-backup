@@ -1,0 +1,86 @@
+# Environment of the integration test. Started by run.sh.
+name: webapp-backup-test
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+
+  mariadb:
+    image: mariadb:11.4
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+
+  postgres:
+    # Server version must not be newer than pg_dump of the host (Ubuntu 24.04: 16).
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: root
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+
+  hc:
+    image: healthchecks/healthchecks:latest
+    environment:
+      SECRET_KEY: webapp-backup-test-secret
+      ALLOWED_HOSTS: "*"
+      SITE_ROOT: http://hc:8000
+      DB_NAME: /tmp/hc.sqlite
+      REGISTRATION_OPEN: "False"
+    healthcheck:
+      test: ["CMD-SHELL", "./fetchstatus.py"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+
+  host:
+    build:
+      context: ../..
+      dockerfile: tests/docker/host.Dockerfile
+      args:
+        DB_CLIENT: mysql-client
+    volumes:
+      - exchange:/exchange
+    depends_on:
+      mysql:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  host-mariadb:
+    build:
+      context: ../..
+      dockerfile: tests/docker/host.Dockerfile
+      args:
+        DB_CLIENT: mariadb-client
+    volumes:
+      - exchange:/exchange
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+  collector:
+    build:
+      context: ../..
+      dockerfile: tests/docker/collector.Dockerfile
+    depends_on:
+      - host
+      - host-mariadb
+      - hc
+
+volumes:
+  exchange:

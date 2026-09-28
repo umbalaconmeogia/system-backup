@@ -47,11 +47,9 @@ done
 load_config "$CONFIG"
 check_db_config
 
-TMP_DIR=""
+TMP_DIR=$(mktemp -d)
 cleanup() {
-    if [ -n "$TMP_DIR" ]; then
-        rm -rf "$TMP_DIR"
-    fi
+    rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
 
@@ -63,7 +61,6 @@ if [ -d "$INPUT" ]; then
 elif [[ "$INPUT" == *.zip ]]; then
     require_cmd unzip
     [ -f "$INPUT" ] || die "File not found: $INPUT"
-    TMP_DIR=$(mktemp -d)
     TOP=$(unzip -Z1 "$INPUT" | head -n 1 | cut -d/ -f1)
     unzip -q "$INPUT" "$TOP/db.sql" "$TOP/manifest.txt" -d "$TMP_DIR" || die "Cannot extract db.sql from $INPUT"
     SQL_FILE="$TMP_DIR/$TOP/db.sql"
@@ -90,12 +87,23 @@ if [ "$YES" != 1 ]; then
     esac
 fi
 
+ERR_FILE="$TMP_DIR/restore.err"
+UCA1400_TO=""
+
 # Output the dump, adjusted for restoring.
 mysql_filter() {
     # The first line of dumps created by mariadb-dump is not understood by mysql client.
     local -a script=(-e '1{/enable the sandbox mode/d}')
     if [ "$AS_IS" != 1 ]; then
         script+=(-e 's/DEFINER=`[^`]+`@`[^`]+`/DEFINER=CURRENT_USER/g')
+        # Routines and triggers of MariaDB keep this sql_mode, which was removed in MySQL 8.
+        # It only affects GRANT statements, so it is safe to remove on any server.
+        script+=(-e 's/(,NO_AUTO_CREATE_USER|NO_AUTO_CREATE_USER,?)//g')
+    fi
+    if [ "$UCA1400_TO" = 0900 ]; then
+        script+=(-e 's/utf8mb4_uca1400_(nopad_)?(ai_ci|as_ci|as_cs)/utf8mb4_0900_\2/g')
+    elif [ -n "$UCA1400_TO" ]; then
+        script+=(-e "s/utf8mb4_uca1400_[a-z_]*_c[is]/$UCA1400_TO/g")
     fi
     LC_ALL=C sed -E "${script[@]}" "$SQL_FILE"
 }
@@ -108,6 +116,37 @@ pgsql_filter() {
     fi
 }
 
+# Collations utf8mb4_uca1400_* (default of MariaDB 11.4 and later) do not exist on MySQL and older MariaDB.
+# Choose the replacement when the target server does not have them.
+choose_uca1400_replacement() {
+    local found
+    grep -q 'utf8mb4_uca1400_' "$SQL_FILE" || return 0
+    found=$("$CMD" --defaults-extra-file="$DB_CREDENTIAL_FILE" -N -B -e \
+        "SELECT COLLATION_NAME FROM information_schema.COLLATIONS WHERE COLLATION_NAME IN ('utf8mb4_uca1400_ai_ci', 'utf8mb4_0900_ai_ci')" \
+        2> /dev/null) || return 0
+    if grep -q uca1400 <<< "$found"; then
+        return 0
+    elif grep -q 0900 <<< "$found"; then
+        UCA1400_TO=0900
+        log "Collations utf8mb4_uca1400_* do not exist on the target server, they are replaced by utf8mb4_0900_*."
+    else
+        UCA1400_TO=utf8mb4_unicode_ci
+        log "Collations utf8mb4_uca1400_* do not exist on the target server, they are replaced by utf8mb4_unicode_ci."
+    fi
+}
+
+# Show errors of the client, with hints for the known ones.
+report_mysql_error() {
+    cat "$ERR_FILE" >&2
+    if grep -q 'ERROR 1419' "$ERR_FILE"; then
+        log "HINT: Binary logging is enabled on the target server, so only an administrator can create triggers and routines."
+        log "HINT: Restore as an administrator (e.g. root), or run on the target server: SET GLOBAL log_bin_trust_function_creators = 1;"
+    fi
+    if grep -q 'ERROR 1227' "$ERR_FILE" && [ "$AS_IS" = 1 ]; then
+        log "HINT: The definer in the dump cannot be used by this user. Restore without --as-is."
+    fi
+}
+
 case "$DB_TYPE" in
     mysql)
         CMD=$(first_cmd mysql mariadb)
@@ -115,12 +154,20 @@ case "$DB_TYPE" in
         "$CMD" --defaults-extra-file="$DB_CREDENTIAL_FILE" \
             -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4" 2> /dev/null \
             || log "Cannot create database \"$DB_NAME\", it is supposed to exist."
-        mysql_filter | "$CMD" --defaults-extra-file="$DB_CREDENTIAL_FILE" --default-character-set=utf8mb4 "$DB_NAME"
+        if [ "$AS_IS" != 1 ]; then
+            choose_uca1400_replacement
+        fi
+        if ! mysql_filter | "$CMD" --defaults-extra-file="$DB_CREDENTIAL_FILE" --default-character-set=utf8mb4 "$DB_NAME" 2> "$ERR_FILE"; then
+            report_mysql_error
+            die "Restore failed: $DB_NAME"
+        fi
+        cat "$ERR_FILE" >&2
         ;;
     pgsql)
         require_cmd psql
         pg_conn_args
-        pgsql_filter | PGPASSFILE="$DB_CREDENTIAL_FILE" psql "${PG_ARGS[@]}" -d "$DB_NAME" -q -v ON_ERROR_STOP=1 > /dev/null
+        pgsql_filter | PGPASSFILE="$DB_CREDENTIAL_FILE" psql "${PG_ARGS[@]}" -d "$DB_NAME" -q -v ON_ERROR_STOP=1 > /dev/null \
+            || die "Restore failed: $DB_NAME"
         ;;
 esac
 

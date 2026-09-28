@@ -22,6 +22,14 @@ chmod +x /opt/webapp-backup/host/*.sh
 All scripts on the host (triggered by the backup server, or by cron) must run as the same user.
 This user needs permission to read all files of the source directory.
 
+Create a dedicated user with a login shell. The backup server connects as this user, and SSH runs `ssh-gate.sh` through its shell.
+Do not use the user `backup`: it already exists on Ubuntu and Debian, with the shell `/usr/sbin/nologin`.
+
+```bash
+sudo useradd -m -s /bin/bash webapp-backup
+sudo install -d -o webapp-backup -g webapp-backup /var/backup
+```
+
 ### 1.3. Config
 
 ```bash
@@ -34,7 +42,39 @@ chmod 600 backup.conf my.cnf
 Edit `backup.conf` and `my.cnf`. `BACKUP_DIR` must be outside of `SOURCE_DIR`.
 
 The database user needs permission to dump the database.
-For MySQL: `SELECT, SHOW VIEW, TRIGGER, EVENT, LOCK TABLES` (and `PROCESS` if `--no-tablespaces` is removed from the dump options).
+
+MySQL 8.0.20 or later:
+
+```sql
+GRANT SELECT, SHOW VIEW, TRIGGER, EVENT, LOCK TABLES ON example_db.* TO 'backup_user'@'localhost';
+GRANT SHOW_ROUTINE ON *.* TO 'backup_user'@'localhost';
+```
+
+MariaDB 11.3 or later:
+
+```sql
+GRANT SELECT, SHOW VIEW, TRIGGER, EVENT, LOCK TABLES, SHOW CREATE ROUTINE ON example_db.* TO 'backup_user'@'localhost';
+```
+
+Older MariaDB: replace `SHOW CREATE ROUTINE ON example_db.*` by `GRANT SELECT ON mysql.proc`.
+
+**Without the privilege to read routines, stored procedures and functions are silently missing from the backup**:
+the dump succeeds, without any error or warning. Check it once after setup:
+
+```bash
+unzip -p /var/backup/example/<backup file>.zip '*/db.sql' | grep -E 'CREATE .*(PROCEDURE|FUNCTION)'
+```
+
+`PROCESS` is also needed if `--no-tablespaces` is removed from the dump options.
+
+PostgreSQL 14 or later:
+
+```sql
+GRANT pg_read_all_data TO backup_user;
+```
+
+The version of `pg_dump` on the host must not be older than the PostgreSQL server
+(for example, `pg_dump` 16 of Ubuntu 24.04 cannot dump a PostgreSQL 17 server).
 
 ### 1.4. Try
 
@@ -89,7 +129,7 @@ ssh-keygen -t ed25519 -N "" -C backup-server -f ~/.ssh/example_ed25519
 Register the content of `~/.ssh/example_ed25519.pub` on the host (see 1.5), then connect once to accept the host key:
 
 ```bash
-ssh -i ~/.ssh/example_ed25519 -p 22 backup@203.0.113.10 list
+ssh -i ~/.ssh/example_ed25519 -p 22 webapp-backup@203.0.113.10 list
 ```
 
 ### 2.3. Config
@@ -168,7 +208,29 @@ To avoid this, run Healthchecks on another server.
 restore.bat C:\path\to\example_prod_db_20260928_010000.zip
 ```
 
-### 4.2. Rebuild the server
+The dump is adjusted for the local environment (the backup file itself is not modified):
+
+* `DEFINER` of views, routines, triggers and events is replaced by `CURRENT_USER`.
+  The user of production usually does not exist on the local PC.
+* The first line written by `mariadb-dump` (`enable the sandbox mode`) is removed. The client of MySQL cannot read it.
+* `NO_AUTO_CREATE_USER` is removed from `sql_mode` of routines and triggers. MariaDB keeps it, MySQL 8 rejects it.
+* Collations `utf8mb4_uca1400_*`, the default of MariaDB 11.4 and later, are replaced by `utf8mb4_0900_*`
+  (or `utf8mb4_unicode_ci`) when the local server does not have them, for example MySQL.
+* PostgreSQL: `OWNER TO`, `GRANT` and `REVOKE` statements are skipped. Objects are owned by the user of the restore.
+
+### 4.2. Restore by a user who is not an administrator (MySQL)
+
+MySQL 8 enables binary logging by default. Then only an administrator can create triggers and routines,
+and the restore fails with `ERROR 1419`. Either restore as an administrator (for example `root`),
+or run this on the target server once:
+
+```sql
+SET PERSIST log_bin_trust_function_creators = 1;
+```
+
+The user also needs all privileges on the target database. If it cannot create databases, create the database before the restore.
+
+### 4.3. Rebuild the server
 
 ```bash
 cd /var/backup/example

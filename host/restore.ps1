@@ -47,9 +47,11 @@ function Find-Command([string[]]$names) {
     throw "Command not found: $($names -join ', ')"
 }
 
-function Invoke-Client([string]$exe, [string]$arguments, [string]$inputFile) {
+function Invoke-Client([string]$exe, [string]$arguments, [string]$inputFile, [string]$outputFile, [string]$errorFile) {
     $params = @{ FilePath = $exe; ArgumentList = $arguments; NoNewWindow = $true; Wait = $true; PassThru = $true }
     if ($inputFile) { $params['RedirectStandardInput'] = $inputFile }
+    if ($outputFile) { $params['RedirectStandardOutput'] = $outputFile }
+    if ($errorFile) { $params['RedirectStandardError'] = $errorFile }
     $process = Start-Process @params
     if ($process.ExitCode -ne 0) { throw "$exe failed (exit code $($process.ExitCode))" }
 }
@@ -117,6 +119,35 @@ try {
         }
     }
 
+    $uca1400To = $null
+    if ($dbType -eq 'mysql') {
+        $client = Find-Command @('mysql', 'mariadb')
+        $common = "--defaults-extra-file=`"$credential`""
+        # This fails when the user has no permission to create database, even if the database exists.
+        try {
+            Invoke-Client $client "$common -e `"CREATE DATABASE IF NOT EXISTS ``$dbName`` CHARACTER SET utf8mb4`"" $null $null (Join-Path $tempDir 'create.err')
+        } catch {
+            Write-Host "Cannot create database `"$dbName`", it is supposed to exist."
+        }
+
+        # Collations utf8mb4_uca1400_* (default of MariaDB 11.4 and later) do not exist on MySQL and older MariaDB.
+        # Choose the replacement when the target server does not have them.
+        if (-not $AsIs -and (Select-String -LiteralPath $sqlFile -Pattern 'utf8mb4_uca1400_' -SimpleMatch -Quiet)) {
+            $found = Join-Path $tempDir 'collations.txt'
+            try {
+                Invoke-Client $client "$common -N -B -e `"SELECT COLLATION_NAME FROM information_schema.COLLATIONS WHERE COLLATION_NAME IN ('utf8mb4_uca1400_ai_ci', 'utf8mb4_0900_ai_ci')`"" $null $found (Join-Path $tempDir 'collations.err')
+                $names = Get-Content -LiteralPath $found
+                if ($names -notcontains 'utf8mb4_uca1400_ai_ci') {
+                    $uca1400To = if ($names -contains 'utf8mb4_0900_ai_ci') { '0900' } else { 'utf8mb4_unicode_ci' }
+                    $shown = if ($uca1400To -eq '0900') { 'utf8mb4_0900_*' } else { $uca1400To }
+                    Write-Host "Collations utf8mb4_uca1400_* do not exist on the target server, they are replaced by $shown."
+                }
+            } catch {
+                # Cannot check. Restore the dump as it is.
+            }
+        }
+    }
+
     # Create the adjusted dump. Latin1 keeps all bytes unchanged.
     $adjusted = Join-Path $tempDir 'restore.sql'
     $latin1 = [System.Text.Encoding]::GetEncoding(28591)
@@ -126,6 +157,9 @@ try {
     try {
         $definer = [regex]'DEFINER=`[^`]+`@`[^`]+`'
         $skip = [regex]'^(ALTER [^;]* OWNER TO [^;]*;|(GRANT|REVOKE) [^;]*;)$'
+        $noAutoCreateUser = [regex]'(,NO_AUTO_CREATE_USER|NO_AUTO_CREATE_USER,?)'
+        $uca1400To0900 = [regex]'utf8mb4_uca1400_(nopad_)?(ai_ci|as_ci|as_cs)'
+        $uca1400Any = [regex]'utf8mb4_uca1400_[a-z_]*_c[is]'
         $first = $true
         while ($null -ne ($line = $reader.ReadLine())) {
             if ($first) {
@@ -136,6 +170,16 @@ try {
             if (-not $AsIs) {
                 if ($dbType -eq 'mysql') {
                     if ($line.Contains('DEFINER=')) { $line = $definer.Replace($line, 'DEFINER=CURRENT_USER') }
+                    # Routines and triggers of MariaDB keep this sql_mode, which was removed in MySQL 8.
+                    # It only affects GRANT statements, so it is safe to remove on any server.
+                    if ($line.Contains('NO_AUTO_CREATE_USER')) { $line = $noAutoCreateUser.Replace($line, '') }
+                    if ($uca1400To -and $line.Contains('utf8mb4_uca1400_')) {
+                        if ($uca1400To -eq '0900') {
+                            $line = $uca1400To0900.Replace($line, 'utf8mb4_0900_$2')
+                        } else {
+                            $line = $uca1400Any.Replace($line, $uca1400To)
+                        }
+                    }
                 } elseif ($skip.IsMatch($line)) {
                     continue
                 }
@@ -148,15 +192,23 @@ try {
     }
 
     if ($dbType -eq 'mysql') {
-        $client = Find-Command @('mysql', 'mariadb')
-        $common = "--defaults-extra-file=`"$credential`""
-        # This fails when the user has no permission to create database, even if the database exists.
+        $errorFile = Join-Path $tempDir 'restore.err'
         try {
-            Invoke-Client $client "$common -e `"CREATE DATABASE IF NOT EXISTS ``$dbName`` CHARACTER SET utf8mb4`"" $null
+            Invoke-Client $client "$common --default-character-set=utf8mb4 `"$dbName`"" $adjusted $null $errorFile
         } catch {
-            Write-Host "Cannot create database `"$dbName`", it is supposed to exist."
+            $errors = if (Test-Path -LiteralPath $errorFile) { Get-Content -LiteralPath $errorFile } else { @() }
+            $errors | ForEach-Object { Write-Host $_ }
+            if ($errors -match 'ERROR 1419') {
+                Write-Host 'HINT: Binary logging is enabled on the target server, so only an administrator can create triggers and routines.'
+                Write-Host 'HINT: Restore as an administrator (e.g. root), or run on the target server: SET GLOBAL log_bin_trust_function_creators = 1;'
+            }
+            if (($errors -match 'ERROR 1227') -and $AsIs) {
+                Write-Host 'HINT: The definer in the dump cannot be used by this user. Restore without -AsIs.'
+            }
+            Write-Host "Restore failed: $dbName"
+            exit 1
         }
-        Invoke-Client $client "$common --default-character-set=utf8mb4 `"$dbName`"" $adjusted
+        Get-Content -LiteralPath $errorFile | ForEach-Object { Write-Host $_ }
     } else {
         $client = Find-Command @('psql')
         $dbUser = $conf['DB_USER']

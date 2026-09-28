@@ -8,8 +8,8 @@ ENV=prod
 # SSH connection to the host.
 SSH_HOST=203.0.113.10
 SSH_PORT=22
-SSH_USER=backup
-SSH_KEY=/home/backup/.ssh/example_ed25519
+SSH_USER=webapp-backup
+SSH_KEY=/home/webapp-backup/.ssh/example_ed25519
 
 # Where to store backup files on this server.
 LOCAL_DIR=/backup/example
