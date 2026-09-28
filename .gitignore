@@ -10,6 +10,3 @@
 *.zip
 *.zip.sha256
 *.sql
-
-# Internal notes
-/docs/requirement.md
