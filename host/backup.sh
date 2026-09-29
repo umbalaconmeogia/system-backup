@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
 # Create a backup of database and/or source code into a zip file.
+# When ENCRYPT_PUBLIC_KEY_FILE is set, the zip file is encrypted with gpg (.zip.gpg).
 #
 # Usage: backup.sh [--config FILE] [--label TEXT] [--if-missing] <db|source|full>
 #
-# On success, the name of the created zip file is printed to stdout (nothing else is).
+# On success, the name of the created backup file is printed to stdout (nothing else is).
 # All messages go to stderr and to BACKUP_DIR/backup.log.
 
 set -euo pipefail
@@ -68,6 +69,11 @@ case "$TYPE" in
 esac
 
 require_cmd zip unzip sha256sum flock
+if [ -n "$ENCRYPT_PUBLIC_KEY_FILE" ]; then
+    require_cmd gpg
+    [ -r "$ENCRYPT_PUBLIC_KEY_FILE" ] \
+        || die "ENCRYPT_PUBLIC_KEY_FILE not found, or user $(id -un) has no permission to read it: $ENCRYPT_PUBLIC_KEY_FILE"
+fi
 if [ "$NEED_DB" = 1 ]; then
     check_db_config
 fi
@@ -108,6 +114,10 @@ fi
 WORK="$WORK_ROOT/$NAME"
 LINK_DIR="$WORK_ROOT/$NAME.link"
 ZIP_FILE="$BACKUP_DIR/$NAME.zip"
+BACKUP_FILE=$ZIP_FILE
+if [ -n "$ENCRYPT_PUBLIC_KEY_FILE" ]; then
+    BACKUP_FILE="$ZIP_FILE.gpg"
+fi
 WARNINGS=0
 
 cleanup() {
@@ -118,7 +128,7 @@ cleanup() {
         rm -f "$LINK_DIR/$NAME"
     fi
     rm -rf "$WORK" "$LINK_DIR" "$WORK_ROOT/$NAME.err"
-    rm -f "$ZIP_FILE.part" "$ZIP_FILE.sha256.part"
+    rm -f "$ZIP_FILE.part" "$BACKUP_FILE.part" "$BACKUP_FILE.sha256.part"
     if [ $rc -ne 0 ]; then
         log "Backup FAILED: $NAME"
         if [ "$IF_MISSING" = 1 ]; then
@@ -131,6 +141,25 @@ trap cleanup EXIT
 
 log "Start backup: $NAME"
 mkdir -p "$WORK"
+
+# Encrypt $1 into $2 with the public key. Only the owner of the private key can decrypt it.
+# The zip file is already compressed, so gpg does not compress it again.
+# The key is given as a file, it is not imported into the keyring of the user.
+gpg_encrypt() {
+    local err="$WORK_ROOT/$NAME.err" line
+    if ! gpg --batch --yes --quiet --trust-model always --compress-algo none \
+        --recipient-file "$ENCRYPT_PUBLIC_KEY_FILE" --output "$2" --encrypt "$1" 2> "$err"; then
+        while IFS= read -r line; do log "gpg: $line"; done < "$err"
+        die "Encryption with ENCRYPT_PUBLIC_KEY_FILE failed: $ENCRYPT_PUBLIC_KEY_FILE"
+    fi
+}
+
+# Fail before the dump, which may take long, when the key cannot be used.
+if [ -n "$ENCRYPT_PUBLIC_KEY_FILE" ]; then
+    echo test > "$WORK/encrypt-test"
+    gpg_encrypt "$WORK/encrypt-test" "$WORK/encrypt-test.gpg"
+    rm -f "$WORK/encrypt-test" "$WORK/encrypt-test.gpg"
+fi
 
 dump_db() {
     local out="$WORK/db.sql" err="$WORK_ROOT/$NAME.err" rc=0 cmd
@@ -222,11 +251,17 @@ create_zip() {
         fi
     fi
     unzip -tq "$ZIP_FILE.part" > /dev/null || die "Created zip file is broken"
-    mv "$ZIP_FILE.part" "$ZIP_FILE"
+    if [ "$BACKUP_FILE" = "$ZIP_FILE" ]; then
+        mv "$ZIP_FILE.part" "$BACKUP_FILE"
+    else
+        gpg_encrypt "$ZIP_FILE.part" "$BACKUP_FILE.part"
+        rm -f "$ZIP_FILE.part"
+        mv "$BACKUP_FILE.part" "$BACKUP_FILE"
+    fi
     # .sha256 is written last, it marks the backup as finished.
-    (cd "$BACKUP_DIR" && sha256sum "$NAME.zip") > "$ZIP_FILE.sha256.part"
-    mv "$ZIP_FILE.sha256.part" "$ZIP_FILE.sha256"
-    log "Created: $ZIP_FILE ($(du -h "$ZIP_FILE" | cut -f1))"
+    (cd "$BACKUP_DIR" && sha256sum "${BACKUP_FILE##*/}") > "$BACKUP_FILE.sha256.part"
+    mv "$BACKUP_FILE.sha256.part" "$BACKUP_FILE.sha256"
+    log "Created: $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1))"
 }
 
 # Delete automatic (not labeled) backups older than KEEP_DAYS, keep at least KEEP_MIN of each type.
@@ -236,12 +271,12 @@ prune() {
     for t in db source full; do
         local -a files=()
         while IFS= read -r f; do
-            [[ "$f" =~ ^${PROJECT}_${ENV}_${t}_([0-9]{8})_[0-9]{6}\.zip$ ]] && files+=("$f")
+            [[ "$f" =~ ^${PROJECT}_${ENV}_${t}_([0-9]{8})_[0-9]{6}\.zip(\.gpg)?$ ]] && files+=("$f")
         done < <(list_finished "$t")
         count=${#files[@]}
         for f in ${files[@]+"${files[@]}"}; do
             [ "$count" -gt "$KEEP_MIN" ] || break
-            [[ "$f" =~ _([0-9]{8})_[0-9]{6}\.zip$ ]]
+            [[ "$f" =~ _([0-9]{8})_[0-9]{6}\.zip(\.gpg)?$ ]]
             stamp=${BASH_REMATCH[1]}
             [ "$stamp" -lt "$cutoff" ] || break
             rm -f "$BACKUP_DIR/$f.sha256" "$BACKUP_DIR/$f"
@@ -260,11 +295,11 @@ prune
 
 if [ "$IF_MISSING" = 1 ]; then
     notify "[backup] $PROJECT $ENV: fallback backup created on $(hostname)" \
-        "Backup server did not trigger the backup today. Created $NAME.zip locally."
+        "Backup server did not trigger the backup today. Created ${BACKUP_FILE##*/} locally."
 fi
 if [ "$WARNINGS" = 1 ]; then
     log "Backup finished with WARNINGS: $NAME"
 else
     log "Backup finished: $NAME"
 fi
-echo "$NAME.zip"
+echo "${BACKUP_FILE##*/}"

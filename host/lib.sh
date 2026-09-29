@@ -42,6 +42,7 @@ load_config() {
     : "${KEEP_DAYS:=30}"
     : "${KEEP_MIN:=7}"
     : "${FAIL_ON_UNREADABLE:=1}"
+    : "${ENCRYPT_PUBLIC_KEY_FILE:=}"
     : "${NOTIFY_SLACK_WEBHOOK:=}"
     : "${NOTIFY_MAIL:=}"
 
@@ -55,9 +56,12 @@ load_config() {
         *) die "DB_TYPE must be mysql, pgsql or none" ;;
     esac
 
-    # Relative credential file path is relative to the config file.
+    # Relative file paths are relative to the config file.
     if [ -n "$DB_CREDENTIAL_FILE" ] && [ "${DB_CREDENTIAL_FILE#/}" = "$DB_CREDENTIAL_FILE" ]; then
         DB_CREDENTIAL_FILE="$CONFIG_DIR/$DB_CREDENTIAL_FILE"
+    fi
+    if [ -n "$ENCRYPT_PUBLIC_KEY_FILE" ] && [ "${ENCRYPT_PUBLIC_KEY_FILE#/}" = "$ENCRYPT_PUBLIC_KEY_FILE" ]; then
+        ENCRYPT_PUBLIC_KEY_FILE="$CONFIG_DIR/$ENCRYPT_PUBLIC_KEY_FILE"
     fi
 }
 
@@ -90,17 +94,18 @@ pg_conn_args() {
 }
 
 # List finished backup files (the ones that have .sha256) of this project, oldest first.
+# Backup files are .zip, or .zip.gpg when encrypted.
 # $1: type (db, source, full) or empty for all types.
 list_finished() {
     local type=${1:-} f prefix
     prefix="${PROJECT}_${ENV}_"
-    for f in "$BACKUP_DIR/$prefix"*.zip; do
+    for f in "$BACKUP_DIR/$prefix"*.zip "$BACKUP_DIR/$prefix"*.zip.gpg; do
         [ -f "$f" ] && [ -f "$f.sha256" ] || continue
         f=${f##*/}
         if [ -n "$type" ]; then
-            [[ "${f#"$prefix"}" =~ ^${type}_[0-9]{8}_[0-9]{6}(_.+)?\.zip$ ]] || continue
+            [[ "${f#"$prefix"}" =~ ^${type}_[0-9]{8}_[0-9]{6}(_.+)?\.zip(\.gpg)?$ ]] || continue
         else
-            [[ "${f#"$prefix"}" =~ ^(db|source|full)_[0-9]{8}_[0-9]{6}(_.+)?\.zip$ ]] || continue
+            [[ "${f#"$prefix"}" =~ ^(db|source|full)_[0-9]{8}_[0-9]{6}(_.+)?\.zip(\.gpg)?$ ]] || continue
         fi
         echo "$f"
     done | sort

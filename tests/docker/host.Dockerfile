@@ -5,7 +5,7 @@ FROM ubuntu:24.04
 ARG DB_CLIENT=mysql-client
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        openssh-server zip unzip acl ${DB_CLIENT} postgresql-client ca-certificates \
+        openssh-server zip unzip acl gnupg ${DB_CLIENT} postgresql-client ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -s /bin/bash webapp-backup \

@@ -97,7 +97,7 @@ GRANT SELECT, SHOW VIEW, TRIGGER, EVENT, LOCK TABLES, SHOW CREATE ROUTINE ON exa
 Older MariaDB: replace `SHOW CREATE ROUTINE ON example_db.*` by `GRANT SELECT ON mysql.proc`.
 
 **Without the privilege to read routines, stored procedures and functions are silently missing from the backup**:
-the dump succeeds, without any error or warning. Check it once after setup:
+the dump succeeds, without any error or warning. Check it once after setup, before enabling the encryption (1.7):
 
 ```bash
 unzip -p /var/webapp-backup/example/<backup file>.zip '*/db.sql' | grep -E 'CREATE .*(PROCEDURE|FUNCTION)'
@@ -146,6 +146,45 @@ Add into crontab of the user (see [crontab.example](../host/crontab.example)), t
 When a fallback backup is created, a notification is sent to `NOTIFY_SLACK_WEBHOOK` and `NOTIFY_MAIL` of `backup.conf`.
 The file is pulled by the backup server at its next run.
 
+### 1.7. Encryption (optional)
+
+Encrypt the backup files, so that a file that leaks out (copied to a PC, sent by mistake...) cannot be read.
+The host encrypts with a public key of gpg. The private key, needed to decrypt, is kept by the administrator:
+it is neither on the host nor on the backup server.
+
+1. On the PC of the administrator (not on the host), create a key pair. Set a strong passphrase when asked.
+   The expiration must be `never`: when the key expires, backups fail.
+
+   ```bash
+   gpg --quick-generate-key "example backup <backup@example.com>" default default never
+   gpg --armor --export backup@example.com > example-backup.pub.asc
+   gpg --armor --export-secret-keys backup@example.com > example-backup.secret.asc
+   ```
+
+2. Keep `example-backup.secret.asc` and its passphrase in at least two safe places
+   (for example, a password manager and an offline USB drive), then delete the file from the PC.
+   **If the private key or its passphrase is lost, all encrypted backups are lost.**
+3. Copy the public key to the host, next to `backup.conf`:
+
+   ```bash
+   sudo install -o root -g webapp-backup -m 640 example-backup.pub.asc /opt/webapp-backup/host/
+   ```
+
+   Then set in `backup.conf`: `ENCRYPT_PUBLIC_KEY_FILE=example-backup.pub.asc`.
+   `gpg` is usually installed already (check with `gpg --version`). Otherwise, on Ubuntu: `sudo apt install gnupg`.
+4. Run `./backup.sh db`: it creates `<name>.zip.gpg`. Download the file to the PC of the administrator and decrypt it:
+
+   ```bash
+   gpg --output example.zip --decrypt example_prod_db_20260928_010000.zip.gpg
+   unzip -l example.zip
+   ```
+
+Try the decryption regularly, for example when restoring a backup into a local PC (4.1).
+
+* File names inside the zip are encrypted too. Only the name of the backup file (project, env, type, date) can be seen.
+* While encrypting, both the zip file and the encrypted file exist in `BACKUP_DIR`: free space for twice the size of a backup is needed.
+* To make sure that the backups of a project are always encrypted, set `REQUIRE_ENCRYPTION` on the backup server (2.3).
+
 ## 2. Backup server
 
 ### 2.1. Install
@@ -180,6 +219,10 @@ chmod 600 collector.conf projects.d/example.conf
 ```
 
 Edit both files. `PROJECT` and `ENV` must be same as in `backup.conf` on the host.
+
+If the host encrypts the backups (1.7), set `REQUIRE_ENCRYPTION=1`, in `collector.conf` for all projects or in `projects.d/example.conf`.
+Then a backup that is not encrypted, for example after `ENCRYPT_PUBLIC_KEY_FILE` is removed by mistake, is not pulled, and the run fails.
+The backup server does not need `gpg` nor the key.
 
 ### 2.4. Try
 
@@ -246,6 +289,9 @@ To avoid this, run Healthchecks on another server.
 restore.bat C:\path\to\example_prod_db_20260928_010000.zip
 ```
 
+For an encrypted backup (`.zip.gpg`), install [Gpg4win](https://www.gpg4win.org/) and import the private key once:
+`gpg --import example-backup.secret.asc`. Then run `restore.bat` with the `.zip.gpg` file, it asks for the passphrase.
+
 The dump is adjusted for the local environment (the backup file itself is not modified):
 
 * `DEFINER` of views, routines, triggers and events is replaced by `CURRENT_USER`.
@@ -270,8 +316,12 @@ The user also needs all privileges on the target database. If it cannot create d
 
 ### 4.3. Rebuild the server
 
+For an encrypted backup, import the private key first (`gpg --import example-backup.secret.asc`),
+and delete it after the restore (`gpg --delete-secret-keys backup@example.com`).
+
 ```bash
 cd /var/webapp-backup/example
+gpg --output example_prod_full_20260928_010000.zip --decrypt example_prod_full_20260928_010000.zip.gpg   # Encrypted backup only
 unzip example_prod_full_20260928_010000.zip
 /opt/webapp-backup/host/restore.sh --as-is example_prod_full_20260928_010000
 cp -a example_prod_full_20260928_010000/example /var/www/

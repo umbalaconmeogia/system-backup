@@ -186,3 +186,18 @@ Sau khi sửa, cách xử lý quyền đọc source cũng đơn giản đi: thay
 * [ ] Mọi lỗi phải ồn ào: thất bại, có cảnh báo, chỉ rõ nguyên nhân. Không có "thành công kèm cảnh báo" mà không ai đọc.
 * [ ] Sau mỗi lần sửa: chạy lại toàn bộ test.
 * [ ] Không sửa script test trong lúc nó đang chạy.
+* [ ] Với bash có `set -e` và `pipefail`: không dùng `| head` sau một lệnh có thể in ra nhiều (xem mục 8).
+
+## 8. Vòng thứ ba: thêm mã hóa
+
+Khi thêm tính năng mã hóa, kịch bản Docker mới restore từ một bản backup `full` (trước đó chỉ restore từ bản `db`),
+và làm lộ một lỗi có sẵn từ đầu, không liên quan đến mã hóa.
+
+| Lỗi | Vì sao trước đây không thấy | Nếu đưa lên production |
+|---|---|---|
+| `restore.sh` restore từ bản `full` của dự án thật thì **dừng mà không in ra gì**, exit code 141. Nguyên nhân: `unzip -Z1 ... \| head -n 1`. `head` thoát sau dòng đầu, `unzip` đang ghi danh sách dài thì bị SIGPIPE, `pipefail` và `set -e` làm script dừng ngay | Test stub restore từ bản `full` chỉ có vài file: `unzip` ghi xong trước khi `head` thoát. Test Docker chỉ restore từ bản `db` | Restore từ bản `full` không chạy được, không có thông báo lỗi nào để biết vì sao |
+
+Cách sửa: dùng `awk`, đọc hết danh sách. Test stub thêm một zip có 5000 file, đã xác nhận test hỏng khi gỡ bản sửa.
+
+Bài học lặp lại mục 4.7: **dữ liệu test phải giống dữ liệu thật**. Một bản backup `full` thật có hàng nghìn file, không phải 3 file.
+Lỗi này cũng im lặng như các lỗi ở mục 2: không có dòng log nào, chỉ có exit code.

@@ -7,7 +7,8 @@ The target database is defined by the config file of the environment that runs t
 not by the backup. The backup file itself is never modified.
 
 .PARAMETER Path
-Backup directory (unzipped), zip file, or sql file.
+Backup directory (unzipped), zip file, zip.gpg file, or sql file.
+A zip.gpg file is decrypted with gpg (Gpg4win): the private key must be imported.
 
 .PARAMETER Config
 Config file (default: backup.conf next to this script).
@@ -77,14 +78,29 @@ try {
     # Find db.sql and manifest.txt.
     $sqlFile = $null
     $manifest = $null
+    $zipPath = $null
     if (-not (Test-Path -LiteralPath $Path)) { throw "Not found: $Path" }
     $Path = (Resolve-Path -LiteralPath $Path).Path
     if (Test-Path -LiteralPath $Path -PathType Container) {
         $sqlFile = Join-Path $Path 'db.sql'
         $manifest = Join-Path $Path 'manifest.txt'
+    } elseif ($Path -like '*.zip.gpg') {
+        $gpg = Find-Command @('gpg')
+        $zipPath = Join-Path $tempDir 'backup.zip'
+        # Not in batch mode: gpg asks for the passphrase of the private key.
+        try {
+            Invoke-Client $gpg "--quiet --output `"$zipPath`" --decrypt `"$Path`"" $null $null $null
+        } catch {
+            throw "Cannot decrypt $Path. Import the private key first: gpg --import <private key file>"
+        }
     } elseif ($Path -like '*.zip') {
+        $zipPath = $Path
+    } else {
+        $sqlFile = $Path
+    }
+    if ($zipPath) {
         Add-Type -AssemblyName System.IO.Compression.FileSystem
-        $zip = [System.IO.Compression.ZipFile]::OpenRead($Path)
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
         try {
             foreach ($entry in $zip.Entries) {
                 if ($entry.FullName -match '^[^/]+/(db\.sql|manifest\.txt)$') {
@@ -97,8 +113,6 @@ try {
         }
         $sqlFile = Join-Path $tempDir 'db.sql'
         $manifest = Join-Path $tempDir 'manifest.txt'
-    } else {
-        $sqlFile = $Path
     }
     if (-not (Test-Path -LiteralPath $sqlFile)) { throw "SQL file not found: $sqlFile" }
 

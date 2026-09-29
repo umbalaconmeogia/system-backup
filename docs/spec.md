@@ -14,7 +14,7 @@ Tài liệu này cụ thể hóa requirement thành spec để triển khai.
 | Giám sát, báo cáo | Healthchecks tự host (mail, Slack) | Không tự viết |
 | Hệ điều hành của server hệ thống | Linux (Ubuntu, Amazon Linux) | Windows làm sau |
 | Docker | Không xử lý riêng | Docker tạo gì trong thư mục source thì backup nguyên cái đó |
-| Mã hóa file backup | Ngoài phạm vi | |
+| Mã hóa file backup | Tùy chọn, bằng public key của gpg | Xem 4.8 |
 
 ## 2. Thành phần
 
@@ -35,7 +35,7 @@ Backup server (cron)                         Server hệ thống
 collect.sh example db
   ping Healthchecks /start
   ssh "backup db"            ------------->  ssh-gate.sh -> backup.sh db
-                                               dump DB, nén zip, ghi .sha256
+                                               dump DB, nén zip, (mã hóa), ghi .sha256
                              <-------------  in ra tên file
   ssh "list"                 ------------->  danh sách file đã hoàn tất
   ssh "get <file>"           ------------->  nội dung file
@@ -78,14 +78,17 @@ Khi backup server hoạt động lại, lượt `collect.sh` kế tiếp sẽ k�
 | `KEEP_DAYS` | Không (30) | Xóa backup tự động cũ hơn số ngày này |
 | `KEEP_MIN` | Không (7) | Luôn giữ ít nhất số bản này, tính theo từng loại backup |
 | `FAIL_ON_UNREADABLE` | Không (1) | `1`: có file trong `SOURCE_DIR` không đọc được thì backup thất bại, danh sách file ghi vào log. `0`: vẫn tạo backup (thiếu các file đó), chỉ cảnh báo |
+| `ENCRYPT_PUBLIC_KEY_FILE` | Không | File public key của gpg (dạng ASCII armored), đường dẫn tương đối tính từ file config. Có đặt: file backup được mã hóa (`.zip.gpg`). Để trống: không mã hóa (`.zip`) |
 | `NOTIFY_SLACK_WEBHOOK`, `NOTIFY_MAIL` | Không | Nơi nhận thông báo khi chạy dự phòng |
 
 ### 4.2. Quy ước tên và cấu trúc
 
-Tên file: `<PROJECT>_<ENV>_<type>_<yyyymmdd>_<HHMMSS>[_<label>].zip`
+Tên file: `<PROJECT>_<ENV>_<type>_<yyyymmdd>_<HHMMSS>[_<label>].zip`, hoặc `.zip.gpg` khi mã hóa.
 
 * `type`: `db`, `source`, `full`.
 * `label`: tùy chọn, dùng khi chạy tay (ví dụ `before_fix_bug_25576`).
+* Đuôi file do host quyết định theo config của host. Collector không tự đoán tên file, luôn lấy tên từ host
+  (output của `backup`, và lệnh `list`).
 
 Ví dụ `example_prod_full_20260928_010000.zip` giải nén ra:
 
@@ -102,8 +105,10 @@ example_prod_full_20260928_010000/
 ### 4.3. Tạo file an toàn
 
 1. Nén vào `<tên>.zip.part`.
-2. Kiểm tra zip, xong mới đổi tên thành `<tên>.zip`.
-3. Ghi `<tên>.zip.sha256` **sau cùng**.
+2. Kiểm tra zip.
+3. Không mã hóa: đổi tên thành `<tên>.zip`.
+   Có mã hóa: mã hóa vào `<tên>.zip.gpg.part`, xóa `<tên>.zip.part`, đổi tên thành `<tên>.zip.gpg`.
+4. Ghi `<tên>.zip.sha256` (hoặc `<tên>.zip.gpg.sha256`) **sau cùng**.
 
 Chỉ file đã có `.sha256` mới được coi là hoàn tất và mới xuất hiện trong lệnh `list`.
 
@@ -138,10 +143,11 @@ Backup server không có quyền xóa hay sửa file trên server hệ thống.
 ### 4.7. Restore DB
 
 ```
-restore.sh [--config FILE] [--as-is] [--yes] <thư mục backup | file zip | db.sql>
+restore.sh [--config FILE] [--as-is] [--yes] <thư mục backup | file zip | file zip.gpg | db.sql>
 ```
 
 * DB đích lấy từ config của môi trường restore, không lấy từ file backup.
+* File `.zip.gpg` được giải mã vào thư mục tạm bằng `gpg`. Private key phải có trong keyring của user chạy restore.
 * Mặc định, dump được điều chỉnh để restore sang môi trường khác (ví dụ máy local):
   * MySQL: thay `DEFINER=...` bằng `DEFINER=CURRENT_USER`.
   * MySQL: bỏ `NO_AUTO_CREATE_USER` khỏi `sql_mode` của routine và trigger (MariaDB giữ, MySQL 8 không chấp nhận).
@@ -152,6 +158,24 @@ restore.sh [--config FILE] [--as-is] [--yes] <thư mục backup | file zip | db.
 * `--as-is`: restore nguyên bản, dùng khi dựng lại chính server gốc.
 * Luôn bỏ dòng đầu `/*!999999\- enable the sandbox mode */` do mariadb-dump sinh ra (MySQL).
 * Trên Windows dùng `restore.bat` (gọi `restore.ps1`): `restore.bat [-Config FILE] [-AsIs] [-Yes] <đường dẫn>`.
+  File `.zip.gpg` cần Gpg4win.
+
+### 4.8. Mã hóa
+
+Mục đích: file backup bị lọt ra ngoài (bị copy về máy cá nhân, gửi nhầm...) thì không đọc được.
+
+| Hạng mục | Quyết định | Lý do |
+|---|---|---|
+| Cách mã hóa | Tạo zip như khi không mã hóa, rồi mã hóa cả file zip bằng `gpg` | Password của zip (ZipCrypto) bị phá bằng known-plaintext, không phụ thuộc độ dài password. Zip AES cần cài 7-Zip, `unzip` và .NET không đọc được, tên file vẫn lộ. Giữ nguyên zip thì không phải kiểm thử lại quyền file, symlink |
+| Loại key | Public key | Backup chạy tự động nên nếu dùng password thì password phải nằm trên host. Với public key, host chỉ mã hóa được, private key do người quản lý giữ, không nằm trên host hay backup server |
+| Công cụ | `gpg --recipient-file` | `gpg` có sẵn trên Ubuntu, Amazon Linux. Key đọc thẳng từ file, không cần import vào keyring của user chạy backup |
+| Nén | `--compress-algo none` | Zip đã nén, nén thêm chỉ tốn CPU |
+| Kiểm tra key | Mã hóa thử một chuỗi ngắn trước khi dump | Key sai hoặc hết hạn thì thất bại ngay, không phải chờ dump xong |
+
+* Tên file bên trong zip cũng được mã hóa. Chỉ tên file backup (dự án, môi trường, loại, ngày giờ) là nhìn thấy.
+* Trong lúc mã hóa, zip chưa mã hóa (`.zip.part`) tạm thời nằm trong `BACKUP_DIR` (quyền `700`), bị xóa ngay sau đó.
+* Backup server không cần `gpg`, không cần key. Checksum tính trên file đã mã hóa.
+* Mất private key là mất toàn bộ backup đã mã hóa. Cách cất giữ key ghi trong `setup.md`.
 
 ## 5. Collector
 
@@ -166,6 +190,7 @@ restore.sh [--config FILE] [--as-is] [--yes] <thư mục backup | file zip | db.
 | `REPORT_SLACK_WEBHOOK` | Tùy chọn. Gửi 1 dòng kết quả sau mỗi lượt chạy, kể cả khi thành công |
 | `MIN_FREE_MB` | Dung lượng trống tối thiểu, thiếu thì báo lỗi |
 | `SIZE_DROP_LIMIT` | Báo lỗi nếu file mới nhỏ hơn bản trước quá số phần trăm này (0: tắt) |
+| `REQUIRE_ENCRYPTION` | `1`: file backup không được mã hóa (không phải `.zip.gpg`) thì không kéo về và báo lỗi. Mặc định `0`. Có thể đặt riêng cho từng dự án trong `projects.d/<tên>.conf` |
 
 `projects.d/<tên>.conf` (mỗi dự án 1 file):
 

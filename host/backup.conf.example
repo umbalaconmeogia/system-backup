@@ -26,6 +26,11 @@ SOURCE_DIR=/var/www/example
 # 0: The backup is created without those files, with a warning.
 FAIL_ON_UNREADABLE=1
 
+# (Optional) Public key file (gpg, ASCII armored) to encrypt the backup files with. Relative path is relative to this file.
+# Set: backup files are <name>.zip.gpg, only the owner of the private key can decrypt them.
+# Empty: backup files are <name>.zip, not encrypted.
+ENCRYPT_PUBLIC_KEY_FILE=
+
 # Delete automatic backups older than KEEP_DAYS, but keep at least KEEP_MIN files of each type.
 # Labeled backups are never deleted.
 KEEP_DAYS=30

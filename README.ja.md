@@ -6,6 +6,7 @@
 バックアップサーバーに集約するためのスクリプト集です。
 
 * MySQL/MariaDB または PostgreSQL のデータベース、ソースディレクトリ、あるいはその両方を zip ファイルにバックアップします。
+  オプションで、zip ファイルを gpg の公開鍵で暗号化できます。
 * Linux または Windows 上でデータベースをリストアします（例：ローカル PC でバグを調査する場合）。
 * バックアップサーバーがホスト上のバックアップを起動し、ファイルを取得して検証します。
   ホストからバックアップサーバーへはアクセスできません。
@@ -14,18 +15,28 @@
 
 ## 仕組み
 
+```mermaid
+sequenceDiagram
+    participant HC as Healthchecks
+    participant C as バックアップサーバー<br/>collect.sh (cron)
+    participant H as ホスト<br/>ssh-gate.sh, backup.sh
+    C->>HC: ping /start
+    C->>H: ssh "backup db"
+    H->>H: データベースのダンプ、zip の作成
+    H-->>C: 作成したファイル名
+    C->>H: ssh "list"
+    H-->>C: 作成済みのバックアップファイル名
+    loop まだ取得していないファイルごと
+        C->>H: ssh "get NAME.sha256", "get NAME"
+        H-->>C: ファイルの内容
+        C->>C: チェックサムの検証
+    end
+    C->>C: 古いバックアップの削除
+    C->>HC: 成功または /fail を ping（ログ付き）
+    Note over HC: メールと Slack でアラート
 ```
-Backup server (cron)                         Host (server that runs the system)
---------------------                         ----------------------------------
-collect.sh example db
-  ping Healthchecks /start
-  ssh "backup db"            ------------->  ssh-gate.sh -> backup.sh db
-                             <-------------  name of the created file
-  ssh "list", "get <file>"   ------------->  content of the files
-  verify checksum
-  delete old backups
-  ping Healthchecks (success or failure, with log)
-```
+
+ホストからバックアップサーバーへはアクセスできません。ホストは上記のコマンドに応答するだけで、実行できるコマンドは `ssh-gate.sh` で制限されています。
 
 | ディレクトリ | 実行場所 | 説明 |
 |---|---|---|
@@ -45,6 +56,9 @@ example_prod_full_20260928_010000.zip
     db.sql            Database dump
     example/          Source directory, as it is (nothing is excluded)
 ```
+
+`backup.conf` で `ENCRYPT_PUBLIC_KEY_FILE` を設定すると、zip ファイルは gpg で暗号化されます：`<name>.zip.gpg`。
+復号できるのは秘密鍵の所有者だけです。[セットアップガイド](docs/setup.ja.md#17-暗号化任意)を参照してください。
 
 ## 使い方
 
@@ -73,9 +87,9 @@ restore.bat C:\path\to\example_prod_db_20260928_010000.zip
 
 ## 動作要件
 
-* ホスト：Linux、bash、zip、unzip、flock、sha256sum、データベースのクライアントツール。
+* ホスト：Linux、bash、zip、unzip、flock、sha256sum、データベースのクライアントツール。暗号化する場合は gpg。
 * バックアップサーバー：Linux、bash、ssh、curl、flock、sha256sum。
-* Windows でのリストア：PowerShell 5.1 以降、データベースのクライアントツール。
+* Windows でのリストア：PowerShell 5.1 以降、データベースのクライアントツール。暗号化されたバックアップには Gpg4win。
 
 ## テスト
 

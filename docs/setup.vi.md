@@ -97,7 +97,7 @@ GRANT SELECT, SHOW VIEW, TRIGGER, EVENT, LOCK TABLES, SHOW CREATE ROUTINE ON exa
 MariaDB cũ hơn: thay `SHOW CREATE ROUTINE ON example_db.*` bằng `GRANT SELECT ON mysql.proc`.
 
 **Nếu thiếu quyền đọc routine, stored procedure và function sẽ bị thiếu trong file backup mà không có thông báo gì**:
-việc dump vẫn thành công, không có lỗi hay cảnh báo. Hãy kiểm tra một lần sau khi cài đặt:
+việc dump vẫn thành công, không có lỗi hay cảnh báo. Hãy kiểm tra một lần sau khi cài đặt, trước khi bật mã hóa (mục 1.7):
 
 ```bash
 unzip -p /var/webapp-backup/example/<backup file>.zip '*/db.sql' | grep -E 'CREATE .*(PROCEDURE|FUNCTION)'
@@ -146,6 +146,45 @@ Thêm vào crontab của user (xem [crontab.example](../host/crontab.example)), 
 Khi bản backup dự phòng được tạo, thông báo được gửi tới `NOTIFY_SLACK_WEBHOOK` và `NOTIFY_MAIL` trong `backup.conf`.
 File sẽ được backup server kéo về ở lượt chạy kế tiếp.
 
+### 1.7. Mã hóa (tùy chọn)
+
+Mã hóa file backup để nếu file bị lọt ra ngoài (bị copy về máy cá nhân, gửi nhầm...) thì cũng không đọc được.
+Host mã hóa bằng public key của gpg. Private key, dùng để giải mã, do người quản lý giữ:
+không nằm trên host, cũng không nằm trên backup server.
+
+1. Trên máy của người quản lý (không phải trên host), tạo cặp key. Đặt passphrase mạnh khi được hỏi.
+   Thời hạn phải là `never`: khi key hết hạn, backup sẽ thất bại.
+
+   ```bash
+   gpg --quick-generate-key "example backup <backup@example.com>" default default never
+   gpg --armor --export backup@example.com > example-backup.pub.asc
+   gpg --armor --export-secret-keys backup@example.com > example-backup.secret.asc
+   ```
+
+2. Cất `example-backup.secret.asc` và passphrase của nó ở ít nhất hai nơi an toàn
+   (ví dụ, trình quản lý mật khẩu và một USB không kết nối mạng), rồi xóa file khỏi máy.
+   **Nếu mất private key hoặc passphrase, toàn bộ các bản backup đã mã hóa sẽ mất theo.**
+3. Copy public key lên host, đặt cạnh `backup.conf`:
+
+   ```bash
+   sudo install -o root -g webapp-backup -m 640 example-backup.pub.asc /opt/webapp-backup/host/
+   ```
+
+   Rồi đặt trong `backup.conf`: `ENCRYPT_PUBLIC_KEY_FILE=example-backup.pub.asc`.
+   `gpg` thường đã được cài sẵn (kiểm tra bằng `gpg --version`). Nếu chưa có, trên Ubuntu: `sudo apt install gnupg`.
+4. Chạy `./backup.sh db`: lệnh này tạo `<tên>.zip.gpg`. Tải file về máy của người quản lý và giải mã:
+
+   ```bash
+   gpg --output example.zip --decrypt example_prod_db_20260928_010000.zip.gpg
+   unzip -l example.zip
+   ```
+
+Hãy thử giải mã định kỳ, ví dụ mỗi khi restore một bản backup về máy local (mục 4.1).
+
+* Tên các file bên trong zip cũng được mã hóa. Chỉ nhìn thấy tên của file backup (dự án, môi trường, loại, ngày giờ).
+* Trong lúc mã hóa, file zip và file đã mã hóa cùng tồn tại trong `BACKUP_DIR`: cần dung lượng trống gấp đôi một bản backup.
+* Để chắc chắn backup của một dự án luôn được mã hóa, đặt `REQUIRE_ENCRYPTION` trên backup server (mục 2.3).
+
 ## 2. Backup server
 
 ### 2.1. Cài đặt
@@ -180,6 +219,10 @@ chmod 600 collector.conf projects.d/example.conf
 ```
 
 Sửa cả hai file. `PROJECT` và `ENV` phải giống với `backup.conf` trên host.
+
+Nếu host mã hóa file backup (mục 1.7), hãy đặt `REQUIRE_ENCRYPTION=1`, trong `collector.conf` cho mọi dự án hoặc trong `projects.d/example.conf`.
+Khi đó, bản backup không được mã hóa, ví dụ do lỡ xóa `ENCRYPT_PUBLIC_KEY_FILE`, sẽ không được kéo về, và lượt chạy thất bại.
+Backup server không cần `gpg` và không cần key.
 
 ### 2.4. Chạy thử
 
@@ -246,6 +289,9 @@ Khi đó, chỉ có thông báo của bản backup dự phòng (mục 1.6) cho b
 restore.bat C:\path\to\example_prod_db_20260928_010000.zip
 ```
 
+Với bản backup đã mã hóa (`.zip.gpg`), cài [Gpg4win](https://www.gpg4win.org/) và import private key một lần:
+`gpg --import example-backup.secret.asc`. Sau đó chạy `restore.bat` với file `.zip.gpg`, lệnh này sẽ hỏi passphrase.
+
 Dump được điều chỉnh cho môi trường local (bản thân file backup không bị sửa):
 
 * `DEFINER` của view, routine, trigger và event được thay bằng `CURRENT_USER`.
@@ -270,8 +316,12 @@ User cũng cần toàn quyền trên database đích. Nếu user không tạo đ
 
 ### 4.3. Dựng lại server
 
+Với bản backup đã mã hóa, import private key trước (`gpg --import example-backup.secret.asc`),
+và xóa nó sau khi restore xong (`gpg --delete-secret-keys backup@example.com`).
+
 ```bash
 cd /var/webapp-backup/example
+gpg --output example_prod_full_20260928_010000.zip --decrypt example_prod_full_20260928_010000.zip.gpg   # Encrypted backup only
 unzip example_prod_full_20260928_010000.zip
 /opt/webapp-backup/host/restore.sh --as-is example_prod_full_20260928_010000
 cp -a example_prod_full_20260928_010000/example /var/www/

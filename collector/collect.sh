@@ -75,6 +75,7 @@ fi
 : "${SSH_OPTIONS:=}"
 : "${KEEP_DAYS:=365}"
 : "${KEEP_MIN:=7}"
+: "${REQUIRE_ENCRYPTION:=0}"
 
 [[ "${PROJECT:-}" =~ ^[A-Za-z0-9_-]+$ ]] || die "PROJECT must contain only letters, digits, _ and -"
 [[ "${ENV:-}" =~ ^[A-Za-z0-9_-]+$ ]] || die "ENV must contain only letters, digits, _ and -"
@@ -82,6 +83,7 @@ for key in SSH_HOST SSH_USER SSH_KEY LOCAL_DIR; do
     [ -n "${!key:-}" ] || die "$key is not set in $PROJECT_CONF"
 done
 [ -f "$SSH_KEY" ] || die "SSH_KEY not found: $SSH_KEY"
+[[ "$REQUIRE_ENCRYPTION" =~ ^[01]$ ]] || die "REQUIRE_ENCRYPTION must be 0 or 1"
 for c in ssh sha256sum flock curl; do
     command -v "$c" > /dev/null 2>&1 || die "Command not found: $c"
 done
@@ -92,7 +94,8 @@ LOCAL_DIR=$(cd "$LOCAL_DIR" && pwd -P)
 LOG_FILE="$LOCAL_DIR/collect.log"
 
 PREFIX="${PROJECT}_${ENV}_"
-NAME_PATTERN="^${PREFIX}(db|source|full)_[0-9]{8}_[0-9]{6}(_[A-Za-z0-9_-]+)?\.zip$"
+# Backup files are .zip, or .zip.gpg when the host encrypts them.
+NAME_PATTERN="^${PREFIX}(db|source|full)_[0-9]{8}_[0-9]{6}(_[A-Za-z0-9_-]+)?\.zip(\.gpg)?$"
 SLUG="${PROJECT}-${ENV}-${ACTION}"
 SLUG=${SLUG,,}
 RID=$(cat /proc/sys/kernel/random/uuid 2> /dev/null || true)
@@ -176,6 +179,15 @@ fetch_error() {
     return 1
 }
 
+# With REQUIRE_ENCRYPTION=1, files that are not encrypted are refused.
+check_encrypted() {
+    [ "$REQUIRE_ENCRYPTION" = 1 ] || return 0
+    [[ "$1" == *.gpg ]] && return 0
+    log "ERROR: $1 is not encrypted, it is not pulled (REQUIRE_ENCRYPTION=1)." \
+        "Set ENCRYPT_PUBLIC_KEY_FILE in backup.conf of the host, and delete the file on the host."
+    return 1
+}
+
 # Pull a file, verify its checksum. Return 1 when the file cannot be pulled.
 fetch() {
     local name=$1 expected actual
@@ -204,7 +216,7 @@ sync_files() {
         if [ -f "$LOCAL_DIR/$name" ] && [ -f "$LOCAL_DIR/$name.sha256" ]; then
             continue
         fi
-        if fetch "$name"; then
+        if check_encrypted "$name" && fetch "$name"; then
             count=$((count + 1))
         else
             errors=$((errors + 1))
@@ -218,11 +230,11 @@ sync_files() {
 # List files here, oldest first. $1: type, $2: "auto" to list not labeled files only.
 list_local() {
     local type=$1 auto=${2:-} f
-    for f in "$LOCAL_DIR/$PREFIX${type}_"*.zip; do
+    for f in "$LOCAL_DIR/$PREFIX${type}_"*.zip "$LOCAL_DIR/$PREFIX${type}_"*.zip.gpg; do
         [ -f "$f" ] && [ -f "$f.sha256" ] || continue
         f=${f##*/}
         if [ "$auto" = auto ]; then
-            [[ "$f" =~ ^${PREFIX}${type}_[0-9]{8}_[0-9]{6}\.zip$ ]] || continue
+            [[ "$f" =~ ^${PREFIX}${type}_[0-9]{8}_[0-9]{6}\.zip(\.gpg)?$ ]] || continue
         else
             [[ "$f" =~ $NAME_PATTERN ]] || continue
         fi
@@ -261,7 +273,7 @@ prune() {
         count=${#files[@]}
         for f in ${files[@]+"${files[@]}"}; do
             [ "$count" -gt "$KEEP_MIN" ] || break
-            [[ "$f" =~ _([0-9]{8})_[0-9]{6}\.zip$ ]]
+            [[ "$f" =~ _([0-9]{8})_[0-9]{6}\.zip(\.gpg)?$ ]]
             [ "${BASH_REMATCH[1]}" -lt "$cutoff" ] || break
             rm -f "$LOCAL_DIR/$f.sha256" "$LOCAL_DIR/$f"
             log "Deleted old backup: $f"
@@ -294,6 +306,7 @@ if [ "$ACTION" != sync ]; then
     NEW_FILE=$(printf '%s\n' "$OUTPUT" | tail -n 1)
     [[ "$NEW_FILE" =~ $NAME_PATTERN ]] || die "Unexpected answer from host: $NEW_FILE"
     log "Host created: $NEW_FILE"
+    check_encrypted "$NEW_FILE" || die "Host created a backup that is not encrypted: $NEW_FILE"
 fi
 
 PULL_ERRORS=0

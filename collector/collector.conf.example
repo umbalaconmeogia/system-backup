@@ -17,3 +17,7 @@ MIN_FREE_MB=1024
 
 # Fail when the new backup is smaller than the previous one by more than this percent. 0 to disable.
 SIZE_DROP_LIMIT=50
+
+# 1: Fail when the host creates a backup that is not encrypted (ENCRYPT_PUBLIC_KEY_FILE of backup.conf is not set),
+#    such files are not pulled. Can be set for each project in projects.d/<name>.conf.
+REQUIRE_ENCRYPTION=0

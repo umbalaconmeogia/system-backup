@@ -6,6 +6,7 @@ Scripts for backing up database and source code of running systems, and collecti
 into a backup server.
 
 * Backup MySQL/MariaDB or PostgreSQL database, source directory, or both, into a zip file.
+  Optionally, the zip file is encrypted with a gpg public key.
 * Restore the database on Linux or on Windows (for example, to investigate a bug on a local PC).
 * The backup server triggers the backup on the hosts, pulls the files and verifies them.
   Hosts cannot access the backup server.
@@ -14,18 +15,28 @@ into a backup server.
 
 ## How it works
 
+```mermaid
+sequenceDiagram
+    participant HC as Healthchecks
+    participant C as Backup server<br/>collect.sh (cron)
+    participant H as Host<br/>ssh-gate.sh, backup.sh
+    C->>HC: ping /start
+    C->>H: ssh "backup db"
+    H->>H: dump database, create zip
+    H-->>C: name of the created file
+    C->>H: ssh "list"
+    H-->>C: names of finished backup files
+    loop Each file that is not here yet
+        C->>H: ssh "get NAME.sha256", "get NAME"
+        H-->>C: content of the files
+        C->>C: verify checksum
+    end
+    C->>C: delete old backups
+    C->>HC: ping success or /fail, with log
+    Note over HC: Alerts via mail and Slack
 ```
-Backup server (cron)                         Host (server that runs the system)
---------------------                         ----------------------------------
-collect.sh example db
-  ping Healthchecks /start
-  ssh "backup db"            ------------->  ssh-gate.sh -> backup.sh db
-                             <-------------  name of the created file
-  ssh "list", "get <file>"   ------------->  content of the files
-  verify checksum
-  delete old backups
-  ping Healthchecks (success or failure, with log)
-```
+
+The host cannot access the backup server. It only answers the commands above, which are limited by `ssh-gate.sh`.
 
 | Directory | Runs on | Description |
 |---|---|---|
@@ -45,6 +56,9 @@ example_prod_full_20260928_010000.zip
     db.sql            Database dump
     example/          Source directory, as it is (nothing is excluded)
 ```
+
+When `ENCRYPT_PUBLIC_KEY_FILE` is set in `backup.conf`, the zip file is encrypted with gpg: `<name>.zip.gpg`.
+Only the owner of the private key can decrypt it. See [setup guide](docs/setup.md#17-encryption-optional).
 
 ## Usage
 
@@ -73,9 +87,9 @@ See [setup guide](docs/setup.md) for installation.
 
 ## Requirements
 
-* Host: Linux, bash, zip, unzip, flock, sha256sum, client tools of the database.
+* Host: Linux, bash, zip, unzip, flock, sha256sum, client tools of the database. gpg for the encryption.
 * Backup server: Linux, bash, ssh, curl, flock, sha256sum.
-* Restore on Windows: PowerShell 5.1 or later, client tools of the database.
+* Restore on Windows: PowerShell 5.1 or later, client tools of the database. Gpg4win for encrypted backups.
 
 ## Test
 

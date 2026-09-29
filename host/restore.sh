@@ -2,10 +2,11 @@
 #
 # Restore database from a backup.
 #
-# Usage: restore.sh [--config FILE] [--as-is] [--yes] <backup directory | zip file | sql file>
+# Usage: restore.sh [--config FILE] [--as-is] [--yes] <backup directory | zip file | zip.gpg file | sql file>
 #
 # The target database is defined by the config file of the environment that runs this script,
 # not by the backup. The backup file itself is never modified.
+# A .zip.gpg file is decrypted with gpg: the private key must be in the keyring of the user.
 
 set -euo pipefail
 
@@ -15,7 +16,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 usage() {
     cat >&2 <<EOF
-Usage: $(basename "$0") [--config FILE] [--as-is] [--yes] <backup directory | zip file | sql file>
+Usage: $(basename "$0") [--config FILE] [--as-is] [--yes] <backup directory | zip file | zip.gpg file | sql file>
 
   --config FILE   Config file (default: backup.conf next to this script).
   --as-is         Restore the dump as it is (to rebuild the original server).
@@ -55,18 +56,31 @@ trap cleanup EXIT
 
 SQL_FILE=""
 MANIFEST=""
+ZIP=""
 if [ -d "$INPUT" ]; then
     SQL_FILE="$INPUT/db.sql"
     MANIFEST="$INPUT/manifest.txt"
-elif [[ "$INPUT" == *.zip ]]; then
-    require_cmd unzip
+elif [[ "$INPUT" == *.zip.gpg ]]; then
+    require_cmd gpg
     [ -f "$INPUT" ] || die "File not found: $INPUT"
-    TOP=$(unzip -Z1 "$INPUT" | head -n 1 | cut -d/ -f1)
-    unzip -q "$INPUT" "$TOP/db.sql" "$TOP/manifest.txt" -d "$TMP_DIR" || die "Cannot extract db.sql from $INPUT"
-    SQL_FILE="$TMP_DIR/$TOP/db.sql"
-    MANIFEST="$TMP_DIR/$TOP/manifest.txt"
+    ZIP="$TMP_DIR/backup.zip"
+    # Not in batch mode: gpg asks for the passphrase of the private key.
+    gpg --quiet --output "$ZIP" --decrypt "$INPUT" \
+        || die "Cannot decrypt $INPUT. Import the private key first: gpg --import <private key file>"
+elif [[ "$INPUT" == *.zip ]]; then
+    [ -f "$INPUT" ] || die "File not found: $INPUT"
+    ZIP=$INPUT
 else
     SQL_FILE=$INPUT
+fi
+if [ -n "$ZIP" ]; then
+    require_cmd unzip
+    # awk reads the whole list. With head, unzip is killed by SIGPIPE when the list is long,
+    # and the script stops without any message (pipefail).
+    TOP=$(unzip -Z1 "$ZIP" | awk -F/ 'NR == 1 {print $1}')
+    unzip -q "$ZIP" "$TOP/db.sql" "$TOP/manifest.txt" -d "$TMP_DIR" || die "Cannot extract db.sql from $INPUT"
+    SQL_FILE="$TMP_DIR/$TOP/db.sql"
+    MANIFEST="$TMP_DIR/$TOP/manifest.txt"
 fi
 [ -f "$SQL_FILE" ] || die "SQL file not found: $SQL_FILE"
 

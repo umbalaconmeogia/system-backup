@@ -10,8 +10,9 @@ Cập nhật lần cuối: 2026-09-28.
 | `host/backup.sh`, `host/ssh-gate.sh`, `host/restore.sh` | Đã kiểm thử với MySQL 8.4, MariaDB 11.4, PostgreSQL 16 và sshd thật (Docker) |
 | `collector/collect.sh` | Đã kiểm thử qua sshd thật, báo cáo tới Healthchecks thật |
 | `host/restore.bat`, `host/restore.ps1` | Đã kiểm thử trên Windows với client `mysql` 9.3 và MySQL 8.4 thật: restore dump của MariaDB 11.4 |
-| `tests/run-tests.sh` (test stub) | 78/78 đạt trên Ubuntu 24.04 |
-| `tests/docker/run.sh` (test Docker) | 110/110 đạt |
+| Mã hóa (`ENCRYPT_PUBLIC_KEY_FILE`, `REQUIRE_ENCRYPTION`) | Đã kiểm thử trên Linux (test stub và Docker). Restore `.zip.gpg` trên Windows **chưa chạy thử** |
+| `tests/run-tests.sh` (test stub) | 113/113 đạt trên Ubuntu (gpg 2.4.8) |
+| `tests/docker/run.sh` (test Docker) | 127/127 đạt |
 | GitHub Actions | Chưa làm |
 | Chạy thử trên server thật | Chưa làm |
 | Host trên Amazon Linux 2023 | Chưa kiểm thử |
@@ -43,14 +44,16 @@ Các vấn đề phát sinh trong quá trình kiểm thử và bài học rút r
 | Code thuộc `root`, config thuộc `root:webapp-backup` quyền `640` (riêng `pgpass` thuộc `webapp-backup`, quyền `600`) | User chạy backup không sửa được `ssh-gate.sh` và config. `pgpass` là ngoại lệ vì client PostgreSQL bỏ qua file group đọc được |
 | Có file source không đọc được thì mặc định backup thất bại (`FAIL_ON_UNREADABLE=1`) | Backup thiếu file mà không ai biết là lỗi tệ nhất. Log liệt kê file không đọc được |
 | Source của user khác: cấp quyền đọc bằng ACL, cài một lần, không dùng cron áp lại quyền | Đơn giản. Trường hợp ACL không bao phủ được thì phát hiện qua `FAIL_ON_UNREADABLE` và sửa tay |
-| Không xử lý riêng Docker, không mã hóa file backup | Ngoài phạm vi |
+| Không xử lý riêng Docker | Ngoài phạm vi |
+| Mã hóa là tùy chọn (`ENCRYPT_PUBLIC_KEY_FILE`): zip như cũ rồi mã hóa cả file bằng public key của gpg (`.zip.gpg`) | Password của zip (ZipCrypto) bị phá được. Public key thì host không giải mã được, private key không nằm trên host hay backup server. Chi tiết: `spec.md` 4.8 |
+| Collector có `REQUIRE_ENCRYPTION`: host trả về file không mã hóa thì không kéo về và báo lỗi | Lỡ xóa `ENCRYPT_PUBLIC_KEY_FILE` trên host thì backup lại thành zip thường mà không ai biết |
 | Ưu tiên dùng công cụ có sẵn | Chỉ tự viết phần mà công cụ có sẵn không đáp ứng |
 
 ## 4. Kiểm thử
 
 | Bộ test | Lệnh | Cần gì | Thời gian |
 |---|---|---|---|
-| Test stub | `bash tests/run-tests.sh` | bash, `zip`, `unzip`, `flock` | Vài chục giây |
+| Test stub | `bash tests/run-tests.sh` | bash, `zip`, `unzip`, `flock`, `gpg` | Vài chục giây |
 | Test Docker | `bash tests/docker/run.sh` | Docker | Khoảng 2 phút (lần đầu thêm vài phút để build image) |
 
 Test Docker dựng các container: MySQL 8.4, MariaDB 11.4, PostgreSQL 16, Healthchecks, 2 host Ubuntu 24.04
@@ -71,7 +74,8 @@ Test Docker dựng các container: MySQL 8.4, MariaDB 11.4, PostgreSQL 16, Healt
 | 11 | 2 backup chạy cùng lúc |
 | 12 | Có file không đọc được trong source: mặc định backup thất bại và liệt kê file, với `FAIL_ON_UNREADABLE=0` thì vẫn tạo backup kèm cảnh báo |
 | 13 | Source thuộc user khác, cấp quyền bằng đúng các lệnh ACL trong `setup.md`: file `600` và file tạo sau được backup; file bị `chmod 600` sau đó làm backup thất bại, chạy lại `setfacl` thì hết |
-| 14 | Database lớn: chỉ chạy khi đặt `LARGE_MB`, ví dụ `LARGE_MB=500 bash tests/docker/run.sh`. **Chưa chạy lần nào** |
+| 14 | Mã hóa: tạo key như `setup.md` 1.7, file `.zip.gpg`, user chạy backup không giải mã được, giải mã ra giống hệt source, `restore.sh` giải mã và restore, collector (không có `gpg`) kéo file về, `REQUIRE_ENCRYPTION=1` báo lỗi khi host không mã hóa |
+| 15 | Database lớn: chỉ chạy khi đặt `LARGE_MB`, ví dụ `LARGE_MB=500 bash tests/docker/run.sh`. **Chưa chạy lần nào** |
 
 Tùy chọn `KEEP=1` giữ lại các container sau khi chạy để điều tra.
 
@@ -96,8 +100,10 @@ Kiểm thử còn phát hiện thêm các lỗi chưa được dự đoán, xem 
 2. **Chạy thử trên một server thật**: làm theo [setup.vi.md](setup.vi.md) với một dự án thật, kèm Healthchecks thật.
    Kiểm tra cả 2 trường hợp: mail và Slack báo khi backup thất bại, và báo khi quá hạn không có backup.
 3. **Amazon Linux 2023**: thêm một host dùng image `amazonlinux:2023` vào test Docker, bổ sung tên gói vào `setup.md`.
-   Cần kiểm tra thêm: gói `acl`, và `find -readable` mà `backup.sh` dùng để liệt kê file không đọc được.
-4. **Database lớn**: chạy kịch bản 14, ghi lại thời gian và dung lượng.
+   Cần kiểm tra thêm: gói `acl`, `find -readable` mà `backup.sh` dùng để liệt kê file không đọc được,
+   và `gpg --recipient-file` (Amazon Linux cài sẵn gói `gnupg2-minimal`).
+4. **Database lớn**: chạy kịch bản 15, ghi lại thời gian và dung lượng (nên chạy cả khi có mã hóa).
+5. **Restore file `.zip.gpg` trên Windows**: `restore.ps1` đã có phần giải mã bằng Gpg4win nhưng **chưa chạy thử lần nào**.
 
 ## 7. Quy ước
 

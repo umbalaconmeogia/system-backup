@@ -97,7 +97,7 @@ GRANT SELECT, SHOW VIEW, TRIGGER, EVENT, LOCK TABLES, SHOW CREATE ROUTINE ON exa
 それより古い MariaDB：`SHOW CREATE ROUTINE ON example_db.*` を `GRANT SELECT ON mysql.proc` に置き換えてください。
 
 **ルーチンを読む権限がないと、ストアドプロシージャとファンクションは何の通知もなくバックアップから欠落します**。
-ダンプはエラーも警告もなく成功します。セットアップ後に一度確認してください：
+ダンプはエラーも警告もなく成功します。セットアップ後、暗号化（1.7）を有効にする前に一度確認してください：
 
 ```bash
 unzip -p /var/webapp-backup/example/<backup file>.zip '*/db.sql' | grep -E 'CREATE .*(PROCEDURE|FUNCTION)'
@@ -146,6 +146,45 @@ command="/opt/webapp-backup/host/ssh-gate.sh /opt/webapp-backup/host/backup.conf
 フォールバックのバックアップが作成されると、`backup.conf` の `NOTIFY_SLACK_WEBHOOK` と `NOTIFY_MAIL` に通知が送られます。
 ファイルは、バックアップサーバーの次回の実行時に取得されます。
 
+### 1.7. 暗号化（任意）
+
+バックアップファイルを暗号化すると、ファイルが外部に漏れた場合（PC にコピーされた、誤って送信されたなど）でも読まれません。
+ホストは gpg の公開鍵で暗号化します。復号に必要な秘密鍵は管理者が保管し、
+ホストにもバックアップサーバーにも置きません。
+
+1. 管理者の PC（ホストではなく）で鍵ペアを作成します。聞かれたら強いパスフレーズを設定してください。
+   有効期限は `never` にする必要があります。鍵の有効期限が切れると、バックアップが失敗します。
+
+   ```bash
+   gpg --quick-generate-key "example backup <backup@example.com>" default default never
+   gpg --armor --export backup@example.com > example-backup.pub.asc
+   gpg --armor --export-secret-keys backup@example.com > example-backup.secret.asc
+   ```
+
+2. `example-backup.secret.asc` とそのパスフレーズを、少なくとも 2 か所の安全な場所
+   （例えば、パスワードマネージャーとオフラインの USB メモリ）に保管し、PC からファイルを削除します。
+   **秘密鍵またはパスフレーズを失うと、暗号化されたすべてのバックアップが失われます。**
+3. 公開鍵をホストの `backup.conf` と同じ場所にコピーします：
+
+   ```bash
+   sudo install -o root -g webapp-backup -m 640 example-backup.pub.asc /opt/webapp-backup/host/
+   ```
+
+   そして `backup.conf` に設定します：`ENCRYPT_PUBLIC_KEY_FILE=example-backup.pub.asc`。
+   `gpg` は通常インストール済みです（`gpg --version` で確認）。ない場合、Ubuntu では `sudo apt install gnupg`。
+4. `./backup.sh db` を実行すると `<name>.zip.gpg` が作成されます。ファイルを管理者の PC にダウンロードし、復号します：
+
+   ```bash
+   gpg --output example.zip --decrypt example_prod_db_20260928_010000.zip.gpg
+   unzip -l example.zip
+   ```
+
+定期的に復号を試してください。例えば、バックアップをローカル PC にリストアするとき（4.1）です。
+
+* zip の中のファイル名も暗号化されます。見えるのはバックアップファイルの名前（プロジェクト、環境、種類、日時）だけです。
+* 暗号化の間は、zip ファイルと暗号化されたファイルの両方が `BACKUP_DIR` に存在します。バックアップ 2 つ分の空き容量が必要です。
+* プロジェクトのバックアップが必ず暗号化されるようにするには、バックアップサーバーで `REQUIRE_ENCRYPTION` を設定します（2.3）。
+
 ## 2. バックアップサーバー
 
 ### 2.1. インストール
@@ -180,6 +219,10 @@ chmod 600 collector.conf projects.d/example.conf
 ```
 
 両方のファイルを編集します。`PROJECT` と `ENV` は、ホストの `backup.conf` と同じにする必要があります。
+
+ホストがバックアップを暗号化する場合（1.7）は、`REQUIRE_ENCRYPTION=1` を設定します。すべてのプロジェクトには `collector.conf` に、
+プロジェクトごとには `projects.d/example.conf` に設定します。すると、暗号化されていないバックアップ（例えば `ENCRYPT_PUBLIC_KEY_FILE` を誤って消した場合）は
+取得されず、実行は失敗します。バックアップサーバーには `gpg` も鍵も不要です。
 
 ### 2.4. 試す
 
@@ -246,6 +289,9 @@ Healthchecks をバックアップサーバー上で動かしていて、その�
 restore.bat C:\path\to\example_prod_db_20260928_010000.zip
 ```
 
+暗号化されたバックアップ（`.zip.gpg`）の場合は、[Gpg4win](https://www.gpg4win.org/) をインストールし、秘密鍵を一度インポートします：
+`gpg --import example-backup.secret.asc`。その後 `.zip.gpg` ファイルを指定して `restore.bat` を実行すると、パスフレーズを聞かれます。
+
 ダンプはローカル環境向けに調整されます（バックアップファイル自体は変更されません）：
 
 * ビュー、ルーチン、トリガー、イベントの `DEFINER` は `CURRENT_USER` に置き換えられます。
@@ -270,8 +316,12 @@ SET PERSIST log_bin_trust_function_creators = 1;
 
 ### 4.3. サーバーの再構築
 
+暗号化されたバックアップの場合は、先に秘密鍵をインポートし（`gpg --import example-backup.secret.asc`）、
+リストアの後で削除します（`gpg --delete-secret-keys backup@example.com`）。
+
 ```bash
 cd /var/webapp-backup/example
+gpg --output example_prod_full_20260928_010000.zip --decrypt example_prod_full_20260928_010000.zip.gpg   # Encrypted backup only
 unzip example_prod_full_20260928_010000.zip
 /opt/webapp-backup/host/restore.sh --as-is example_prod_full_20260928_010000
 cp -a example_prod_full_20260928_010000/example /var/www/

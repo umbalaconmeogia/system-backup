@@ -6,6 +6,7 @@ Bộ script dùng để backup database và source code của các hệ thống 
 về một backup server.
 
 * Backup database MySQL/MariaDB hoặc PostgreSQL, thư mục source, hoặc cả hai, thành một file zip.
+  Có thể tùy chọn mã hóa file zip bằng public key của gpg.
 * Restore database trên Linux hoặc trên Windows (ví dụ, để điều tra bug trên máy local).
 * Backup server kích hoạt việc backup trên các host, kéo file về và kiểm tra.
   Host không truy cập được vào backup server.
@@ -14,18 +15,28 @@ về một backup server.
 
 ## Cách hoạt động
 
+```mermaid
+sequenceDiagram
+    participant HC as Healthchecks
+    participant C as Backup server<br/>collect.sh (cron)
+    participant H as Host<br/>ssh-gate.sh, backup.sh
+    C->>HC: ping /start
+    C->>H: ssh "backup db"
+    H->>H: dump database, tạo file zip
+    H-->>C: tên file vừa tạo
+    C->>H: ssh "list"
+    H-->>C: tên các file backup đã tạo xong
+    loop Mỗi file chưa có trên backup server
+        C->>H: ssh "get NAME.sha256", "get NAME"
+        H-->>C: nội dung file
+        C->>C: kiểm tra checksum
+    end
+    C->>C: xóa backup cũ
+    C->>HC: ping thành công hoặc /fail, kèm log
+    Note over HC: Cảnh báo qua mail và Slack
 ```
-Backup server (cron)                         Host (server that runs the system)
---------------------                         ----------------------------------
-collect.sh example db
-  ping Healthchecks /start
-  ssh "backup db"            ------------->  ssh-gate.sh -> backup.sh db
-                             <-------------  name of the created file
-  ssh "list", "get <file>"   ------------->  content of the files
-  verify checksum
-  delete old backups
-  ping Healthchecks (success or failure, with log)
-```
+
+Host không truy cập được vào backup server. Host chỉ trả lời các lệnh ở trên, và `ssh-gate.sh` giới hạn chỉ cho chạy các lệnh này.
 
 | Thư mục | Chạy ở đâu | Mô tả |
 |---|---|---|
@@ -45,6 +56,9 @@ example_prod_full_20260928_010000.zip
     db.sql            Database dump
     example/          Source directory, as it is (nothing is excluded)
 ```
+
+Khi đặt `ENCRYPT_PUBLIC_KEY_FILE` trong `backup.conf`, file zip được mã hóa bằng gpg: `<tên>.zip.gpg`.
+Chỉ người giữ private key mới giải mã được. Xem [hướng dẫn cài đặt](docs/setup.vi.md#17-mã-hóa-tùy-chọn).
 
 ## Cách dùng
 
@@ -73,9 +87,9 @@ Xem [hướng dẫn cài đặt](docs/setup.vi.md) để biết cách cài đặ
 
 ## Yêu cầu
 
-* Host: Linux, bash, zip, unzip, flock, sha256sum, công cụ client của database.
+* Host: Linux, bash, zip, unzip, flock, sha256sum, công cụ client của database. gpg nếu mã hóa.
 * Backup server: Linux, bash, ssh, curl, flock, sha256sum.
-* Restore trên Windows: PowerShell 5.1 trở lên, công cụ client của database.
+* Restore trên Windows: PowerShell 5.1 trở lên, công cụ client của database. Gpg4win với bản backup đã mã hóa.
 
 ## Test
 

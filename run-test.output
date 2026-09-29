@@ -1,0 +1,41 @@
+backup.sh db
+  ok   stdout is the file name only
+  ok   name follows the convention
+  ok   zip file exists
+  ok   checksum is correct
+  ok   zip has <name>/db.sql
+  ok   zip has <name>/manifest.txt
+  ok   zip has nothing outside <name>/
+  ok   work directory is removed
+  ok   no .part file remains
+backup.sh full
+  ok   zip has database
+  ok   zip has source files
+  ok   zip has the symbolic link
+  ok   symbolic link is stored as link
+  ok   extracted file is same as source
+  ok   source directory is untouched
+  ok   manifest has type
+backup.sh source, label
+  ok   label is in the name
+  ok   zip has no database
+  ok   invalid label is refused
+backup.sh errors
+  ok   fails when dump fails
+  ok   no zip is created
+  ok   no .part file remains
+  ok   error of dump is logged
+  ok   BACKUP_DIR inside SOURCE_DIR is refused
+backup.sh prune
+  ok   old backup is deleted
+  ok   checksum of old backup is deleted
+  ok   old backup is deleted (2)
+  ok   labeled backup is kept
+  ok   KEEP_MIN of other type is respected
+  ok   file of other project is kept
+  ok   unfinished file is not touched
+  ok   new backups are kept
+backup.sh --if-missing
+  ok   nothing is created when backup of today exists
+  ok   nothing is printed
+  ok   no notification

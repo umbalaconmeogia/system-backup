@@ -2,7 +2,7 @@
 #
 # Test host and collector scripts on one machine.
 # Database commands, ssh and curl are replaced by stubs, so no database, no network is needed.
-# Requires: bash, zip, unzip, sha256sum, flock.
+# Requires: bash, zip, unzip, sha256sum, flock, gpg.
 #
 # Usage: tests/run-tests.sh
 
@@ -10,7 +10,15 @@ set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 T=$(mktemp -d)
-trap 'rm -rf "$T"' EXIT
+cleanup() {
+    local home
+    # Stop gpg-agent of the test key rings.
+    for home in "$T"/gnupg*; do
+        [ -d "$home" ] && GNUPGHOME=$home gpgconf --kill all > /dev/null 2>&1
+    done
+    rm -rf "$T"
+}
+trap cleanup EXIT
 chmod +x "$ROOT"/host/*.sh "$ROOT"/collector/*.sh
 
 PASSED=0
@@ -335,6 +343,87 @@ rm -f "$T/mysql.stdin"
 check "restore from directory, as is" $RESTORE --as-is "$T/extract/$NAME"
 check "DEFINER is kept" grep -q 'DEFINER=`admin`@`10.0.0.%`' "$T/mysql.stdin"
 check_not "canceled without confirmation" bash -c "echo n | '$ROOT/host/restore.sh' --config '$T/backup.conf' '$ZIP'"
+# Full backup of a real project: the list of files in the zip is long.
+mkdir -p "$T/many/$NAME/app"
+cp "$T/extract/$NAME/db.sql" "$T/extract/$NAME/manifest.txt" "$T/many/$NAME/"
+for i in $(seq 1 5000); do echo x > "$T/many/$NAME/app/file_with_a_long_name_$i.txt"; done
+(cd "$T/many" && zip -qr "$T/many.zip" "$NAME")
+rm -f "$T/mysql.stdin"
+check "restore from zip file with many files" $RESTORE "$T/many.zip"
+check "data is kept" grep -q 'INSERT INTO `t` VALUES (2000,' "$T/mysql.stdin"
+
+# --- Encryption ---------------------------------------------------------------
+
+echo "encryption: backup.sh"
+# Key ring of the owner of the private key. The host only has the exported public key.
+export GNUPGHOME="$T/gnupg"
+mkdir -m 700 "$GNUPGHOME" "$T/gnupg-empty"
+gpg --batch --quiet --passphrase '' --quick-generate-key 'demo backup <backup@example.com>' default default never 2> /dev/null
+gpg --armor --export backup@example.com > "$T/backup.pub.asc"
+check "test key is created" test -s "$T/backup.pub.asc"
+cp "$T/backup.conf" "$T/backup.conf.plain"
+echo "ENCRYPT_PUBLIC_KEY_FILE=backup.pub.asc" >> "$T/backup.conf"
+fake demo_prod_db_20200101_010000.zip.gpg
+next_second
+OUT=$($BACKUP db 2> "$T/err")
+NAME=${OUT%.zip.gpg}
+check "name ends with .zip.gpg" grep -Eq '^demo_prod_db_[0-9]{8}_[0-9]{6}\.zip\.gpg$' <<< "$OUT"
+check "encrypted file exists" test -f "$B/$OUT"
+check "checksum is correct" bash -c "cd '$B' && sha256sum -c '$OUT.sha256'"
+check_not "zip file is not left" test -e "$B/$NAME.zip"
+check "no .part file remains" test "$(count_files "$B" '*.part')" = 0
+check_not "encrypted file cannot be read as zip" unzip -l "$B/$OUT"
+gpg --batch --quiet --output "$T/decrypted.zip" --decrypt "$B/$OUT" 2> /dev/null
+check "decrypted file is the zip" bash -c "unzip -Z1 '$T/decrypted.zip' | grep -qx '$NAME/db.sql'"
+check_not "old encrypted backup is deleted" test -f "$B/demo_prod_db_20200101_010000.zip.gpg"
+check "list returns the encrypted file" bash -c "SSH_ORIGINAL_COMMAND=list $GATE | grep -qx '$OUT'"
+check "get returns the encrypted file" bash -c "SSH_ORIGINAL_COMMAND='get $OUT' $GATE | cmp - '$B/$OUT'"
+check "get returns its checksum file" gate "get $OUT.sha256"
+
+BEFORE=$(ls "$B" | wc -l)
+sed 's/^ENCRYPT_PUBLIC_KEY_FILE=.*/ENCRYPT_PUBLIC_KEY_FILE=missing.asc/' "$T/backup.conf" > "$T/nokey.conf"
+check_not "fails when the key file does not exist" "$ROOT/host/backup.sh" --config "$T/nokey.conf" db
+echo "not a key" > "$T/bad.asc"
+sed 's/^ENCRYPT_PUBLIC_KEY_FILE=.*/ENCRYPT_PUBLIC_KEY_FILE=bad.asc/' "$T/backup.conf" > "$T/badkey.conf"
+check_not "fails when the key is invalid" "$ROOT/host/backup.sh" --config "$T/badkey.conf" db
+check "reason is logged" grep -q "Encryption with ENCRYPT_PUBLIC_KEY_FILE failed" "$B/backup.log"
+check_not "fails before the dump" bash -c "awk '/Start backup/ {s = \"\"} {s = s \$0 \"\n\"} END {printf \"%s\", s}' '$B/backup.log' | grep -q 'Database dumped'"
+check "no file is created" test "$(ls "$B" | wc -l)" = "$BEFORE"
+
+echo "encryption: restore.sh"
+rm -f "$T/mysql.stdin"
+check "restore from .zip.gpg" $RESTORE "$B/$OUT"
+check "data is restored" grep -q 'INSERT INTO `t` VALUES (2000,' "$T/mysql.stdin"
+check "encrypted file is not modified" bash -c "cd '$B' && sha256sum -c '$OUT.sha256'"
+check_not "fails without the private key" bash -c "GNUPGHOME='$T/gnupg-empty' $RESTORE '$B/$OUT' > '$T/nokey.out' 2>&1"
+check "hint is shown" grep -q "Import the private key" "$T/nokey.out"
+
+echo "encryption: collect.sh"
+fake_collected() {
+    echo "fake" > "$C/$1"
+    (cd "$C" && sha256sum "$1" > "$1.sha256")
+}
+fake_collected demo_prod_db_20200101_010000.zip.gpg
+: > "$T/curl.log"
+next_second
+check "succeeds" $COLLECT demo db
+check "encrypted files are pulled" bash -c "cd '$B' && for f in *.zip.gpg; do cmp \"\$f\" '$C/'\"\$f\" || exit 1; done"
+check "success is pinged" grep -q "^https://hc.example.com/ping/key/demo-prod-db?" "$T/curl.log"
+check_not "old encrypted backup is deleted" test -f "$C/demo_prod_db_20200101_010000.zip.gpg"
+
+echo "REQUIRE_ENCRYPTION=1" >> "$T/collector/collector.conf"
+next_second
+check "REQUIRE_ENCRYPTION=1: succeeds when the host encrypts" $COLLECT demo db
+cp "$T/backup.conf.plain" "$T/backup.conf"
+BEFORE=$(count_files "$C" '*.zip')
+: > "$T/curl.log"
+next_second
+check_not "REQUIRE_ENCRYPTION=1: fails when the host does not encrypt" $COLLECT demo db
+check "failure is pinged" grep -q "/demo-prod-db/fail?" "$T/curl.log"
+check "reason is logged" grep -q "is not encrypted" "$C/collect.log"
+check "file that is not encrypted is not pulled" test "$(count_files "$C" '*.zip')" = "$BEFORE"
+check_not "REQUIRE_ENCRYPTION=1: sync fails while the host has a file that is not encrypted" $COLLECT demo sync
+check "file that is not encrypted is still not pulled" test "$(count_files "$C" '*.zip')" = "$BEFORE"
 
 echo
 echo "Passed: $PASSED, failed: $FAILED"

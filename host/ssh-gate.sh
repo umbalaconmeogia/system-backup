@@ -44,7 +44,7 @@ case "${WORDS[0]:-}" in
         [ ${#WORDS[@]} -eq 2 ] || deny
         load_config "$CONFIG"
         FILE=${WORDS[1]}
-        [[ "$FILE" =~ ^[A-Za-z0-9._-]+\.zip(\.sha256)?$ ]] || deny
+        [[ "$FILE" =~ ^[A-Za-z0-9._-]+\.zip(\.gpg)?(\.sha256)?$ ]] || deny
         [ "${FILE#"${PROJECT}_${ENV}_"}" != "$FILE" ] || deny
         [ -f "$BACKUP_DIR/${FILE%.sha256}.sha256" ] || { echo "ssh-gate: file not found" >&2; exit 1; }
         [ -f "$BACKUP_DIR/$FILE" ] || { echo "ssh-gate: file not found" >&2; exit 1; }

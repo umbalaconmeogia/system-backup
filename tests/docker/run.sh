@@ -319,7 +319,7 @@ HC_AUTO_CREATE=1
 MIN_FREE_MB=10
 SIZE_DROP_LIMIT=50
 EOF
-for spec in shop:host crm:host blog:host-mariadb; do
+for spec in shop:host crm:host blog:host-mariadb safe:host; do
     project=${spec%%:*}
     svc=${spec#*:}
     on collector "ssh-keygen -q -t ed25519 -N '' -C collector -f /root/.ssh/${project}_key"
@@ -557,10 +557,57 @@ check "file changed by chmod 600: the file is listed" grep -q "$SRC/index.php" "
 on host "setfacl -R -m u:webapp-backup:rX $SRC"
 check "after running setfacl again: backup succeeds" as_backup host "$BIN/backup.sh --config $CONF/acl.conf source"
 
-# --- 14. Large database (optional) --------------------------------------------
+# --- 14. Encryption -----------------------------------------------------------
+
+echo "14. Encryption (docs/setup.md 1.7)"
+# The administrator creates the key pair outside of the host. Here: root of the host, with its own key ring.
+ADMIN_GPG="GNUPGHOME=/root/admin-gnupg"
+on host "mkdir -m 700 /root/admin-gnupg
+    $ADMIN_GPG gpg --batch --quiet --passphrase '' --quick-generate-key 'example backup <backup@example.com>' default default never
+    $ADMIN_GPG gpg --armor --export backup@example.com > /tmp/example-backup.pub.asc
+    install -o root -g webapp-backup -m 640 /tmp/example-backup.pub.asc $CONF/safe.pub.asc"
+put host $CONF/safe.conf 640 <<'EOF'
+PROJECT=safe
+ENV=prod
+BACKUP_DIR=/var/webapp-backup/safe
+DB_TYPE=mysql
+DB_NAME=demo
+DB_CREDENTIAL_FILE=shop.cnf
+SOURCE_DIR=/var/www/demo
+ENCRYPT_PUBLIC_KEY_FILE=safe.pub.asc
+EOF
+SAFE_FULL=$(as_backup host "$BIN/backup.sh --config $CONF/safe.conf full" 2> "$OUT") && ok "backup succeeds" || ng "backup succeeds"
+check "name ends with .zip.gpg" grep -Eq '^safe_prod_full_[0-9]{8}_[0-9]{6}\.zip\.gpg$' <<< "$SAFE_FULL"
+check_not "no zip file is left on the host" on host "ls /var/webapp-backup/safe/*.zip"
+check_not "the user of the backup cannot decrypt" as_backup host "gpg --batch --decrypt /var/webapp-backup/safe/$SAFE_FULL > /dev/null"
+NAME=${SAFE_FULL%.zip.gpg}
+on host "rm -rf /tmp/safe && mkdir /tmp/safe && cd /tmp/safe
+    $ADMIN_GPG gpg --batch --quiet --output backup.zip --decrypt /var/webapp-backup/safe/$SAFE_FULL && unzip -q backup.zip"
+check "decrypted: source is same as original" on host "diff -r --no-dereference /var/www/demo /tmp/safe/$NAME/demo"
+check "decrypted: dump has the procedure" on host "grep -Eq 'PROCEDURE \`?count_items' /tmp/safe/$NAME/db.sql"
+
+# MySQL was restarted in 8, the global variable is reset.
+mysql_on mysql -e "DROP DATABASE IF EXISTS demo_restore; CREATE DATABASE demo_restore CHARACTER SET utf8mb4; SET GLOBAL log_bin_trust_function_creators = 1"
+check "restore.sh decrypts and restores" on host "$ADMIN_GPG $BIN/restore.sh --config $CONF/shop-restore.conf --yes /var/webapp-backup/safe/$SAFE_FULL"
+check_eq "restored data is same as source" "$(mysql_dump_data mysql demo)" "$(mysql_dump_data mysql demo_restore)"
+check_not "restore.sh without the private key fails" \
+    as_backup host "$BIN/restore.sh --config $CONF/shop-restore.conf --yes /var/webapp-backup/safe/$SAFE_FULL"
+check "hint is shown" grep -q "Import the private key" "$OUT"
+
+check_not "the backup server has no gpg" on collector "command -v gpg"
+check "collect succeeds" on collector "$COLLECT safe full"
+check "encrypted file is pulled" on collector "cd /backup/safe && sha256sum -c --quiet $SAFE_FULL.sha256"
+on collector "echo REQUIRE_ENCRYPTION=1 >> /opt/webapp-backup/collector/projects.d/safe.conf"
+check "REQUIRE_ENCRYPTION=1: collect succeeds when the host encrypts" on collector "$COLLECT safe db"
+on host "sed -i 's/^ENCRYPT_PUBLIC_KEY_FILE=.*/ENCRYPT_PUBLIC_KEY_FILE=/' $CONF/safe.conf"
+check_not "REQUIRE_ENCRYPTION=1: collect fails when the host does not encrypt" on collector "$COLLECT safe db"
+check_eq "REQUIRE_ENCRYPTION=1: failure is pinged to Healthchecks" "fail True" "$(hc_pings safe-prod-db | tail -n 1 | cut -d' ' -f1,3)"
+check_not "REQUIRE_ENCRYPTION=1: file that is not encrypted is not pulled" on collector "ls /backup/safe/*.zip"
+
+# --- 15. Large database (optional) --------------------------------------------
 
 if [ "$LARGE_MB" -gt 0 ]; then
-    echo "14. Large database (about ${LARGE_MB}MB)"
+    echo "15. Large database (about ${LARGE_MB}MB)"
     mysql_on mysql demo -e "
         CREATE TABLE big (id INT AUTO_INCREMENT PRIMARY KEY, payload VARCHAR(1000));
         SET SESSION cte_max_recursion_depth = 10000000;
